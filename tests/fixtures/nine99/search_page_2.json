@@ -1,0 +1,53 @@
+{
+  "data": {
+    "searchAds": {
+      "count": 6,
+      "ads": [
+        {
+          "id": "100000005",
+          "title": "5 сот., участок под строительство",
+          "reseted": "2026-10-27T12:00:00+02:00",
+          "price": {"value": {"bargain": false, "down_payment": 0, "measurement": "UNIT_EUR", "mode": "PM_FIXED", "unit": "UNIT_EUR", "value": 30000}},
+          "images": {"value": []},
+          "body": null,
+          "author": {"value": {"abbreviations": {}, "translated": "Частное лицо", "value": 18895}},
+          "landType": {"value": {"abbreviations": {}, "translated": "Участок под строительство", "value": 1039}},
+          "landArea": {"value": {"unit": "UNIT_ARE", "value": 5}},
+          "mapPoint": {"value": {"lat": "north", "lon": 28.9, "zoom": 16}},
+          "region": {"value": {"abbreviations": {}, "translated": "Кишинёв мун.", "value": 12900}},
+          "city": {"value": {"abbreviations": {}, "translated": "Бачой", "value": 13800}},
+          "district": {"value": {"abbreviations": {}, "translated": "Центр", "value": 15002}},
+          "street": {"value": "-"},
+          "gas": null,
+          "electricity": null,
+          "water": null,
+          "sewerage": null,
+          "asphaltRoad": null,
+          "inSettlement": null
+        },
+        {
+          "id": "100000006",
+          "title": "9 сот., участок под строительство",
+          "reseted": "2026-10-27T10:00:00+02:00",
+          "price": null,
+          "images": {"value": ["ccc333.jpg"]},
+          "body": {"value": {"ro": null, "ru": "Участок у леса.", "translated": "Участок у леса."}},
+          "author": {"value": {"abbreviations": {}, "translated": "Частное лицо", "value": 18895}},
+          "landType": {"value": {"abbreviations": {}, "translated": "Участок под строительство", "value": 1039}},
+          "landArea": {"value": {"unit": "UNIT_ARE", "value": 9}},
+          "mapPoint": {"value": {"lat": 46.9431, "lon": 28.779, "zoom": 16}},
+          "region": {"value": {"abbreviations": {}, "translated": "Яловены", "value": 12920}},
+          "city": {"value": {"abbreviations": {}, "translated": "Яловены", "value": 13700}},
+          "district": {"value": {"abbreviations": {}, "translated": "Окраина", "value": 15003}},
+          "street": {"value": "str. Renașterii"},
+          "gas": {"value": false},
+          "electricity": {"value": true},
+          "water": {"value": false},
+          "sewerage": {"value": false},
+          "asphaltRoad": {"value": true},
+          "inSettlement": {"value": true}
+        }
+      ]
+    }
+  }
+}
