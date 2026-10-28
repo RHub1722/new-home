@@ -6,7 +6,7 @@ from collections.abc import Iterator
 import httpx
 
 from homealize.config import Settings
-from homealize.sources.base import EmptySearchError, Page
+from homealize.sources.base import EmptySearchError, Page, SourceSchemaError
 from homealize.sources.nine99.http import PoliteClient
 from homealize.sources.nine99.parse import parse_search_response
 from homealize.sources.nine99.query import build_search_body
@@ -33,14 +33,21 @@ class Nine99Source:
                 skip=skip, limit=self._page_size, area_min=self._area_min, area_max=self._area_max
             )
             page = parse_search_response(self._client.post_json(GRAPHQL_PATH, body))
-            if skip == 0 and page.total_count == 0:
-                raise EmptySearchError("SearchAds вернул 0 объявлений")
+            received = len(page.listings) + len(page.parse_errors)
+            if received == 0:
+                if skip == 0:
+                    raise EmptySearchError("SearchAds вернул 0 объявлений")
+                if skip < page.total_count:
+                    raise SourceSchemaError(
+                        f"999.md вернул пустую страницу с {skip}, хотя найдено {page.total_count}"
+                    )
+                return
             log.info(
                 "999.md: страница с %s, объявлений %s из %s", skip, len(page.listings), page.total_count
             )
             yield page
             skip += self._page_size
-            if skip >= page.total_count or not (page.listings or page.parse_errors):
+            if skip >= page.total_count:
                 return
 
     def close(self) -> None:

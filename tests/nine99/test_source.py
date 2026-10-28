@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from homealize.config import Settings
-from homealize.sources.base import EmptySearchError
+from homealize.sources.base import EmptySearchError, SourceSchemaError
 from homealize.sources.nine99.http import PoliteClient
 from homealize.sources.nine99.source import Nine99Source, build_nine99_source
 from tests.factories import load_fixture
@@ -53,16 +53,44 @@ def test_zero_results_raise_empty_search():
         list(source.iter_pages())
 
 
-def test_stops_on_empty_page_even_if_count_is_higher():
+def test_first_page_without_ads_raises_empty_search():
     requests = []
 
     def handler(request):
         requests.append(request)
         return httpx.Response(200, json={"data": {"searchAds": {"ads": [], "count": 500}}})
 
+    source = make_source(handler)
+    with pytest.raises(EmptySearchError):
+        list(source.iter_pages())
+    assert len(requests) == 1
+
+
+def test_empty_page_mid_scan_raises_and_keeps_earlier_pages():
+    def handler(request):
+        skip = json.loads(request.content)["variables"]["input"]["pagination"]["skip"]
+        if skip == 0:
+            return httpx.Response(200, json=load_fixture("search_page_1.json"))
+        return httpx.Response(200, json={"data": {"searchAds": {"ads": [], "count": 6}}})
+
+    source = make_source(handler)
+    pages = []
+    with pytest.raises(SourceSchemaError):
+        for page in source.iter_pages():
+            pages.append(page)
+    assert len(pages) == 1
+    assert len(pages[0].listings) == 4
+
+
+def test_empty_page_after_count_shrank_ends_normally():
+    def handler(request):
+        skip = json.loads(request.content)["variables"]["input"]["pagination"]["skip"]
+        if skip == 0:
+            return httpx.Response(200, json=load_fixture("search_page_1.json"))
+        return httpx.Response(200, json={"data": {"searchAds": {"ads": [], "count": 3}}})
+
     pages = list(make_source(handler).iter_pages())
     assert len(pages) == 1
-    assert len(requests) == 1
 
 
 def test_build_from_settings_sends_russian_headers():
