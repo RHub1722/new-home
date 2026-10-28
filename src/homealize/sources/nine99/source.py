@@ -37,11 +37,7 @@ class Nine99Source:
             if received == 0:
                 if skip == 0:
                     raise EmptySearchError("SearchAds вернул 0 объявлений")
-                if skip < page.total_count:
-                    raise SourceSchemaError(
-                        f"999.md вернул пустую страницу с {skip}, хотя найдено {page.total_count}"
-                    )
-                return
+                raise SourceSchemaError(f"999.md вернул пустую страницу с {skip} (найдено {page.total_count})")
             log.info(
                 "999.md: страница с %s, объявлений %s из %s", skip, len(page.listings), page.total_count
             )
