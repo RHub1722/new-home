@@ -144,11 +144,11 @@ def to_listing(raw: RawAd) -> Listing:
 
 
 def scrub_phones(text: str) -> str:
-    """Заменяет похожие на телефон последовательности (8–13 цифр) на заглушку."""
+    """Заменяет похожие на телефон последовательности (8 и более цифр) на заглушку."""
 
     def replace(match: re.Match[str]) -> str:
         digits = sum(ch.isdigit() for ch in match.group())
-        return PHONE_PLACEHOLDER if 8 <= digits <= 13 else match.group()
+        return PHONE_PLACEHOLDER if digits >= 8 else match.group()
 
     return _PHONE_CANDIDATE.sub(replace, text)
 
