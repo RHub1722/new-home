@@ -91,3 +91,10 @@ def test_client_error_status_is_schema_error():
     with pytest.raises(SourceSchemaError, match="400"):
         client.post_json("/graphql", {})
     assert len(requests) == 1
+
+
+@pytest.mark.parametrize("status", [408, 429, 501, 522])
+def test_transient_status_is_retried_then_succeeds(status):
+    client, requests, _ = make_client([httpx.Response(status), httpx.Response(200, json=OK)])
+    assert client.post_json("/graphql", {}) == OK
+    assert len(requests) == 2

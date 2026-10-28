@@ -12,7 +12,12 @@ from homealize.sources.base import RateLimitedError, SourceSchemaError, SourceUn
 log = logging.getLogger(__name__)
 
 RATE_LIMIT_MARKER = "request_limit"
-RETRY_STATUSES = {429, 500, 502, 503, 504}
+RETRY_CLIENT_STATUSES = {408, 429}
+
+
+def is_retryable_status(status: int) -> bool:
+    """Повторяем 408, 429 и любой 5xx (в том числе CDN-коды вроде 522), остальное — нет."""
+    return status in RETRY_CLIENT_STATUSES or status >= 500
 
 
 class PoliteClient:
@@ -55,7 +60,7 @@ class PoliteClient:
             else:
                 if RATE_LIMIT_MARKER in str(response.url) or RATE_LIMIT_MARKER in response.text[:2000]:
                     raise RateLimitedError(f"999.md ограничил частоту запросов ({response.url})")
-                if response.status_code not in RETRY_STATUSES:
+                if not is_retryable_status(response.status_code):
                     return self._decode(response)
                 failure = f"HTTP {response.status_code}"
             if attempt >= self._max_retries:
