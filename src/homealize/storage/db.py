@@ -27,7 +27,11 @@ def migrate(conn: sqlite3.Connection) -> int:
     for version, script in _migrations():
         if version <= current:
             continue
-        conn.executescript(f"BEGIN;\n{script}\nPRAGMA user_version = {version};\nCOMMIT;")
+        try:
+            conn.executescript(f"BEGIN;\n{script}\nPRAGMA user_version = {version};\nCOMMIT;")
+        except sqlite3.Error:
+            conn.rollback()
+            raise
         current = version
     return current
 

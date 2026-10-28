@@ -42,3 +42,19 @@ def test_listing_status_must_be_known(db):
 def test_price_history_requires_existing_listing(db):
     with pytest.raises(sqlite3.IntegrityError):
         db.execute("INSERT INTO price_history (listing_id, observed_at) VALUES ('missing', 'now')")
+
+
+def test_failed_migration_is_rolled_back(monkeypatch):
+    monkeypatch.setattr(
+        "homealize.storage.db._migrations",
+        lambda: [(1, "CREATE TABLE t_ok (x INTEGER);\nCREATE TABLE t_ok (x INTEGER);")],
+    )
+    conn = connect(":memory:")
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            migrate(conn)
+        assert not conn.in_transaction
+        assert "t_ok" not in tables(conn)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 0
+    finally:
+        conn.close()
