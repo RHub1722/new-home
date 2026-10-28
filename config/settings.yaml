@@ -1,0 +1,34 @@
+# Настройки Homealize. После правки просто перезапустите команду.
+
+source:
+  base_url: "https://999.md"
+  page_size: 78                  # столько объявлений сайт отдаёт на страницу
+  delay_seconds: [2.0, 3.0]      # пауза между запросами, случайная в этом диапазоне
+  timeout_seconds: 30
+  max_retries: 3
+  backoff_seconds: [5, 15, 45]   # паузы перед повторами при 429/5xx/таймауте
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+
+filters:
+  land_type: "Участок под строительство"
+  area_sot_min: 5
+  area_sot_max: 10
+  allowed_regions:               # поле «Регион» объявления на 999.md
+    - "Кишинёв мун."
+    - "Яловены"
+    - "Страшены"
+    - "Новые Анены"
+    - "Криуляны"
+    - "Хынчешты"
+    - "Оргеев"
+
+storage:
+  db_path: "data/homealize.db"
+
+lifecycle:
+  removal_missed_scans: 2        # снимать объявление после стольких полных проходов без него
+
+logging:
+  path: "logs/homealize.log"
+  max_bytes: 10485760
+  backup_count: 5
