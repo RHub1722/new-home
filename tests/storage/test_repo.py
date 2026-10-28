@@ -65,6 +65,27 @@ def test_filter_reason_is_saved(db):
     assert (row["status"], row["filter_reason"]) == ("filtered_out", "region")
 
 
+def test_filter_status_change_is_update(db):
+    save(db, make_listing(region="Кагул"), status="filtered_out", reason="region")
+    assert save(db, make_listing(), now=T1) is UpsertOutcome.UPDATED
+    row = repo.get_listing(db, "100000001")
+    assert (row["status"], row["filter_reason"]) == ("active", None)
+
+
+def test_price_reappearing_unchanged_is_not_a_price_change(db):
+    save(db, make_listing())
+    assert save(db, make_listing(price_original=None, currency=None), now=T1) is UpsertOutcome.UPDATED
+    assert save(db, make_listing(), now=T1 + timedelta(hours=3)) is UpsertOutcome.UPDATED
+    assert len(repo.get_price_history(db, "100000001")) == 1
+
+
+def test_price_reappearing_different_is_a_price_change(db):
+    save(db, make_listing())
+    save(db, make_listing(price_original=None, currency=None), now=T1)
+    assert save(db, make_listing(price_original=25000.0), now=T1 + timedelta(hours=3)) is UpsertOutcome.PRICE_CHANGED
+    assert [h["price_eur"] for h in repo.get_price_history(db, "100000001")] == [28000.0, 25000.0]
+
+
 def test_unseen_listing_removed_after_threshold(db):
     save(db, make_listing(id="a"))
     save(db, make_listing(id="b"))
@@ -79,7 +100,7 @@ def test_removed_listing_returns_to_active_when_seen_again(db):
     save(db, make_listing(id="b"))
     repo.mark_unseen(db, set(), threshold=1)
     assert repo.get_listing(db, "b")["status"] == "removed"
-    save(db, make_listing(id="b"), now=T1)
+    assert save(db, make_listing(id="b"), now=T1) is UpsertOutcome.UPDATED
     row = repo.get_listing(db, "b")
     assert (row["status"], row["missed_scans"]) == ("active", 0)
 

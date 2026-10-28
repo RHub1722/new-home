@@ -40,10 +40,13 @@ def upsert_listing(
         _record_price(conn, listing, ts)
         return UpsertOutcome.NEW
 
+    last_price = _last_price(conn, listing.id)
     price_changed = listing.price_original is not None and (
-        (existing["price_original"], existing["currency"]) != (listing.price_original, listing.currency)
+        last_price is None
+        or (last_price["price_original"], last_price["currency"]) != (listing.price_original, listing.currency)
     )
     content_changed = any(existing[column] != value for column, value in values.items())
+    state_changed = existing["status"] != status or existing["filter_reason"] != filter_reason
     assignments = ", ".join(f"{column} = ?" for column in values)
     conn.execute(
         f"UPDATE listings SET {assignments}, last_seen_at = ?, missed_scans = 0, status = ?, filter_reason = ? "
@@ -53,7 +56,7 @@ def upsert_listing(
     if price_changed:
         _record_price(conn, listing, ts)
         return UpsertOutcome.PRICE_CHANGED
-    return UpsertOutcome.UPDATED if content_changed else UpsertOutcome.UNCHANGED
+    return UpsertOutcome.UPDATED if content_changed or state_changed else UpsertOutcome.UNCHANGED
 
 
 def mark_unseen(conn: sqlite3.Connection, seen_ids: set[str], *, threshold: int) -> int:
@@ -139,6 +142,14 @@ def _content(listing: Listing) -> dict[str, object]:
         "images": json.dumps(list(listing.images), ensure_ascii=False),
         "site_updated_at": listing.site_updated_at.isoformat() if listing.site_updated_at else None,
     }
+
+
+def _last_price(conn: sqlite3.Connection, listing_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT price_original, currency FROM price_history WHERE listing_id = ? "
+        "ORDER BY observed_at DESC, id DESC LIMIT 1",
+        (listing_id,),
+    ).fetchone()
 
 
 def _record_price(conn: sqlite3.Connection, listing: Listing, ts: str) -> None:
