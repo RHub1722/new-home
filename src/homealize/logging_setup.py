@@ -23,6 +23,8 @@ def configure_logging(cfg: LoggingSettings) -> None:
         setattr(handler, _MARK, True)
         root.addHandler(handler)
     root.setLevel(logging.INFO)
+    # httpx пишет каждый запрос на уровне INFO: в логах и так есть строка на страницу.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def reset_logging() -> None:
@@ -32,3 +34,4 @@ def reset_logging() -> None:
         if getattr(handler, _MARK, False):
             root.removeHandler(handler)
             handler.close()
+    logging.getLogger("httpx").setLevel(logging.NOTSET)

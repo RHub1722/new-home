@@ -1,9 +1,11 @@
+import logging
 from pathlib import Path
 
 import pytest
 
 from homealize import cli
-from homealize.logging_setup import reset_logging
+from homealize.config import Settings
+from homealize.logging_setup import configure_logging, reset_logging
 from tests.factories import FakeSource, make_listing, page
 
 
@@ -70,3 +72,11 @@ def test_settings_file_in_wrong_encoding_prints_russian_error(tmp_path, capsys):
     assert cli.main(["--config", str(cfg), "init-db"]) == 2
     err = capsys.readouterr().err
     assert "Не удалось прочитать настройки" in err
+
+
+def test_configure_logging_silences_httpx_request_lines(tmp_path):
+    cfg = Settings.model_validate({"logging": {"path": (tmp_path / "logs" / "x.log").as_posix()}}).logging
+    configure_logging(cfg)
+    assert logging.getLogger("httpx").level == logging.WARNING
+    reset_logging()
+    assert logging.getLogger("httpx").level == logging.NOTSET

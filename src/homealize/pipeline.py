@@ -60,6 +60,7 @@ def run_once(conn: sqlite3.Connection, source: Source, settings: Settings, *, no
         summary.errors.append(f"{type(exc).__name__}: {exc}")
     except Exception as exc:
         conn.rollback()
+        log.exception("Прогон %s упал", run_id)
         summary.errors.append(f"{type(exc).__name__}: {exc}")
         _finish(conn, run_id, summary, seen, now)
         raise

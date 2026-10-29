@@ -83,6 +83,16 @@ def test_unexpected_error_marks_run_failed_and_propagates(db):
     assert json.loads(run["errors"]) == ["RuntimeError: баг"]
 
 
+def test_unexpected_error_is_logged_with_traceback(db, caplog):
+    source = FakeSource([page(make_listing(id="a"))], fail_at=0, error=RuntimeError("баг"))
+    with pytest.raises(RuntimeError):
+        run_once(db, source, SETTINGS, now=T0)
+    records = [record for record in caplog.records if "упал" in record.getMessage()]
+    assert len(records) == 1
+    assert records[0].levelname == "ERROR"
+    assert records[0].exc_info is not None
+
+
 def test_removal_failure_rolls_back_and_marks_run_failed(db, monkeypatch):
     run_once(db, FakeSource([page(make_listing(id="a"), make_listing(id="b"))]), SETTINGS, now=T0)
     real_mark_unseen = repo.mark_unseen
