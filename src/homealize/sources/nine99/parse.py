@@ -14,7 +14,8 @@ AD_URL = "https://999.md/ru/{id}"
 IMAGE_URL = "https://i.simpalsmedia.com/999.md/BoardImages/900x900/{name}"
 AUTHOR_TYPES = {18895: AUTHOR_PRIVATE, 18894: AUTHOR_AGENCY, 20364: AUTHOR_DEVELOPER}
 PHONE_PLACEHOLDER = "[телефон удалён]"
-_PHONE_CANDIDATE = re.compile(r"\+?\d[\d\s\-().]{6,}\d")
+# Разделители в телефонах: пробел, дефис, U+2010, en dash, em dash, косая черта, скобки, точка.
+_PHONE_CANDIDATE = re.compile(r"[+(]?\d[\d\s\-\u2010\u2013\u2014/().]{6,}\d")
 
 T = TypeVar("T")
 
@@ -138,12 +139,12 @@ def to_listing(raw: RawAd) -> Listing:
         id=raw.id,
         source=SOURCE_NAME,
         url=AD_URL.format(id=raw.id),
-        title=raw.title,
+        title=scrub_phones(raw.title),
         author_type=AUTHOR_TYPES.get(author.value, AUTHOR_UNKNOWN) if author else AUTHOR_UNKNOWN,
         region=_option(raw.region),
         settlement=_option(raw.city),
         zone=_option(raw.district),
-        street=_clean_text(_value(raw.street)),
+        street=_scrub(_clean_text(_value(raw.street))),
         lat=point.lat if has_point else None,
         lon=point.lon if has_point else None,
         area_sot=area.value if area is not None and area.unit == "UNIT_ARE" else None,
@@ -172,6 +173,10 @@ def scrub_phones(text: str) -> str:
     return _PHONE_CANDIDATE.sub(replace, text)
 
 
+def _scrub(text: str | None) -> str | None:
+    return scrub_phones(text) if text is not None else None
+
+
 def _value(feature):
     return feature.value if feature is not None else None
 
@@ -191,5 +196,4 @@ def _clean_text(value: str | None) -> str | None:
 def _description(body: BodyValue | None) -> str | None:
     if body is None:
         return None
-    text = _clean_text(body.translated or body.ru or body.ro)
-    return scrub_phones(text) if text else None
+    return _scrub(_clean_text(body.translated or body.ru or body.ro))

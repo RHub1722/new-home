@@ -155,7 +155,23 @@ def test_envelope_error_text_has_no_input_values():
         ("Тел: 069 123 456 079 123 456", "Тел: [телефон удалён]"),
         ("Тел: 069123456 - 079123456", "Тел: [телефон удалён]"),
         ("Цена 15000 069123456", "Цена [телефон удалён]"),
+        ("Тел: 069/123456", "Тел: [телефон удалён]"),
+        ("Тел 069–123–456", "Тел [телефон удалён]"),
+        ("Тел 069—123—456", "Тел [телефон удалён]"),
+        ("Тел 069\u2010123\u2010456", "Тел [телефон удалён]"),  # U+2010
+        ("Звоните (022) 123 456", "Звоните [телефон удалён]"),
+        ("Участок 6–10 соток, 12/2026", "Участок 6–10 соток, 12/2026"),
     ],
 )
 def test_scrub_phones(text, expected):
     assert scrub_phones(text) == expected
+
+
+def test_phone_in_title_and_street_is_removed():
+    payload = load_fixture("search_page_1.json")
+    ad = payload["data"]["searchAds"]["ads"][0]
+    ad["title"] = "Участок 6 сот., тел 069 123 456"
+    ad["street"] = {"value": "str. Mihai Viteazul, 079-123-456"}
+    parsed = parse_search_response(payload).listings[0]
+    assert parsed.title == "Участок 6 сот., тел [телефон удалён]"
+    assert parsed.street == "str. Mihai Viteazul, [телефон удалён]"
