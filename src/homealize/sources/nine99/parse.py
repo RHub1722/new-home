@@ -44,8 +44,8 @@ class AreaValue(_Raw):
 
 
 class MapPointValue(_Raw):
-    lat: float
-    lon: float
+    lat: float | None = None
+    lon: float | None = None
 
 
 class BodyValue(_Raw):
@@ -114,6 +114,7 @@ def to_listing(raw: RawAd) -> Listing:
     has_price = price is not None and bool(price.value)
     area = _value(raw.landArea)
     point = _value(raw.mapPoint)
+    has_point = point is not None and point.lat is not None and point.lon is not None
     author = _value(raw.author)
     return Listing(
         id=raw.id,
@@ -125,8 +126,8 @@ def to_listing(raw: RawAd) -> Listing:
         settlement=_option(raw.city),
         zone=_option(raw.district),
         street=_clean_text(_value(raw.street)),
-        lat=point.lat if point else None,
-        lon=point.lon if point else None,
+        lat=point.lat if has_point else None,
+        lon=point.lon if has_point else None,
         area_sot=area.value if area is not None and area.unit == "UNIT_ARE" else None,
         land_type=_option(raw.landType),
         price_original=price.value if has_price else None,

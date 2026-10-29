@@ -55,6 +55,24 @@ def test_ad_without_map_and_utilities_section():
     assert (ad.price_original, ad.currency, ad.price_eur) == (900000.0, "MDL", None)
 
 
+def test_map_point_without_coordinates_gives_no_coords():
+    payload = load_fixture("search_page_1.json")
+    payload["data"]["searchAds"]["ads"][0]["mapPoint"] = {"value": {"zoom": 6}}
+    page = parse_search_response(payload)
+    assert page.parse_errors == []
+    ad = page.listings[0]
+    assert (ad.lat, ad.lon) == (None, None)
+
+
+def test_map_point_with_only_lat_gives_no_coords():
+    payload = load_fixture("search_page_1.json")
+    payload["data"]["searchAds"]["ads"][0]["mapPoint"] = {"value": {"lat": 47.0, "zoom": 6}}
+    page = parse_search_response(payload)
+    assert page.parse_errors == []
+    ad = page.listings[0]
+    assert (ad.lat, ad.lon) == (None, None)
+
+
 def test_developer_author():
     assert by_id("search_page_1.json")["100000003"].author_type == "developer"
 
