@@ -62,3 +62,11 @@ def test_invalid_config_prints_russian_error(tmp_path, capsys):
     assert cli.main(["--config", str(cfg), "init-db"]) == 2
     err = capsys.readouterr().err
     assert "Не удалось прочитать настройки" in err
+
+
+def test_settings_file_in_wrong_encoding_prints_russian_error(tmp_path, capsys):
+    cfg = tmp_path / "settings.yaml"
+    cfg.write_text('filters:\n  land_type: "Участок"\n', encoding="cp1251")
+    assert cli.main(["--config", str(cfg), "init-db"]) == 2
+    err = capsys.readouterr().err
+    assert "Не удалось прочитать настройки" in err

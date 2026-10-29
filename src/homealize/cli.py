@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
-from pydantic import ValidationError
 
 from homealize.config import Settings, load_settings
 from homealize.logging_setup import configure_logging
@@ -28,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = load_settings(args.config)
-    except (OSError, yaml.YAMLError, ValidationError) as exc:
+    except (OSError, ValueError, yaml.YAMLError) as exc:  # ValueError: не UTF-8 и ошибки pydantic
         print(f"Не удалось прочитать настройки {args.config}: {exc}", file=sys.stderr)
         return 2
     if args.command == "init-db":
