@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -79,6 +80,24 @@ def test_unexpected_error_marks_run_failed_and_propagates(db):
     run = repo.last_run(db)
     assert run["status"] == "failed"
     assert json.loads(run["errors"]) == ["RuntimeError: баг"]
+
+
+def test_removal_failure_rolls_back_and_marks_run_failed(db, monkeypatch):
+    run_once(db, FakeSource([page(make_listing(id="a"), make_listing(id="b"))]), SETTINGS, now=T0)
+    real_mark_unseen = repo.mark_unseen
+
+    def half_done_then_fail(conn, seen_ids, *, threshold):
+        real_mark_unseen(conn, seen_ids, threshold=threshold)
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(repo, "mark_unseen", half_done_then_fail)
+    with pytest.raises(sqlite3.OperationalError):
+        run_once(db, FakeSource([page(make_listing(id="a"))]), SETTINGS, now=at(3))
+    run = repo.last_run(db)
+    assert run["status"] == "failed"
+    assert json.loads(run["errors"]) == ["OperationalError: database is locked"]
+    assert repo.get_listing(db, "b")["missed_scans"] == 0
+    assert not db.in_transaction
 
 
 def test_end_to_end_with_999_fixtures_over_http(db):

@@ -36,6 +36,7 @@ def run_once(conn: sqlite3.Connection, source: Source, settings: Settings, *, no
                 )
                 _count(summary, outcome)
             conn.commit()
+        summary.removed = repo.mark_unseen(conn, seen, threshold=settings.lifecycle.removal_missed_scans)
         summary.search_complete = True
     except SourceError as exc:
         conn.rollback()
@@ -47,8 +48,6 @@ def run_once(conn: sqlite3.Connection, source: Source, settings: Settings, *, no
         _finish(conn, run_id, summary, seen, now)
         raise
 
-    if summary.search_complete:
-        summary.removed = repo.mark_unseen(conn, seen, threshold=settings.lifecycle.removal_missed_scans)
     _finish(conn, run_id, summary, seen, now)
     log.info(
         "Прогон %s завершён (%s): увидено %s, новых %s, цена изменилась %s, обновлено %s, снято %s, ошибок %s",
