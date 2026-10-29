@@ -48,3 +48,17 @@ def test_run_returns_1_when_scan_interrupted(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(cli, "build_nine99_source", lambda settings: FakeSource([], fail_at=0))
     assert cli.main(["--config", str(cfg), "run"]) == 1
     assert "НЕ завершён" in capsys.readouterr().out
+
+
+def test_missing_config_prints_russian_error(tmp_path, capsys):
+    assert cli.main(["--config", str(tmp_path / "nope.yaml"), "run"]) == 2
+    err = capsys.readouterr().err
+    assert "Не удалось прочитать настройки" in err
+
+
+def test_invalid_config_prints_russian_error(tmp_path, capsys):
+    cfg = tmp_path / "settings.yaml"
+    cfg.write_text("filters:\n  area_max: 12\n", encoding="utf-8")
+    assert cli.main(["--config", str(cfg), "init-db"]) == 2
+    err = capsys.readouterr().err
+    assert "Не удалось прочитать настройки" in err
