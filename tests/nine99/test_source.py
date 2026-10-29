@@ -112,12 +112,42 @@ def test_empty_page_with_zero_count_mid_scan_raises():
     assert len(pages) == 1
 
 
+def page_1_payload(*, ads: int = 4, count: int = 6) -> dict:
+    payload = load_fixture("search_page_1.json")
+    payload["data"]["searchAds"]["ads"] = payload["data"]["searchAds"]["ads"][:ads]
+    payload["data"]["searchAds"]["count"] = count
+    return payload
+
+
+def test_count_smaller_than_received_raises_schema_error():
+    source = make_source(lambda request: httpx.Response(200, json=page_1_payload(count=2)))
+    with pytest.raises(SourceSchemaError, match="найдено 2"):
+        list(source.iter_pages())
+
+
+def test_short_page_mid_scan_raises_and_mentions_page_size():
+    source = make_source(lambda request: httpx.Response(200, json=page_1_payload(ads=3, count=6)))
+    pages = []
+    with pytest.raises(SourceSchemaError, match="page_size"):
+        for page in source.iter_pages():
+            pages.append(page)
+    assert pages == []
+
+
+def test_single_short_page_that_covers_the_count_is_fine():
+    source = make_source(lambda request: httpx.Response(200, json=page_1_payload(ads=3, count=3)))
+    pages = list(source.iter_pages())
+    assert [len(page.listings) for page in pages] == [3]
+
+
 def test_build_from_settings_sends_russian_headers():
     requests = []
 
     def handler(request):
         requests.append(request)
-        return httpx.Response(200, json=load_fixture("search_page_2.json"))
+        payload = load_fixture("search_page_2.json")
+        payload["data"]["searchAds"]["count"] = 2  # одна страница из двух объявлений: сервер согласован
+        return httpx.Response(200, json=payload)
 
     source = build_nine99_source(Settings(), transport=httpx.MockTransport(handler))
     try:

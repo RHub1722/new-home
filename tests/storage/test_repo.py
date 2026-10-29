@@ -105,6 +105,16 @@ def test_removed_listing_returns_to_active_when_seen_again(db):
     assert (row["status"], row["missed_scans"]) == ("active", 0)
 
 
+def test_count_not_removed_counts_active_and_filtered_out_only(db):
+    assert repo.count_not_removed(db) == 0
+    save(db, make_listing(id="a"))
+    save(db, make_listing(id="b", region="Кагул"), status="filtered_out", reason="region")
+    save(db, make_listing(id="c"))
+    repo.mark_unseen(db, {"a", "b"}, threshold=1)
+    assert repo.get_listing(db, "c")["status"] == "removed"
+    assert repo.count_not_removed(db) == 2
+
+
 def test_run_lifecycle(db):
     run_id = repo.start_run(db, T0)
     assert repo.last_run(db)["status"] == "running"

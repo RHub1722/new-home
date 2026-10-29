@@ -198,3 +198,35 @@ def test_miss_seen_miss_keeps_listing_active(db):
     run_once(db, FakeSource([page(both[0])]), SETTINGS, now=at(9))
     row = repo.get_listing(db, "b")
     assert (row["status"], row["missed_scans"]) == ("active", 1)
+
+
+def test_scan_that_sees_under_half_of_known_listings_removes_nothing(db):
+    known = [make_listing(id=name) for name in "abcd"]
+    run_once(db, FakeSource([page(*known)]), SETTINGS, now=T0)
+    summary = run_once(db, FakeSource([page(known[0])]), SETTINGS, now=at(3))
+    assert summary.search_complete is False
+    assert summary.removed == 0
+    assert "Обход увидел 1 объявлений при 4 известных — снятие пропущено" in summary.errors
+    assert repo.last_run(db)["status"] == "failed"
+    for name in "bcd":
+        row = repo.get_listing(db, name)
+        assert (row["status"], row["missed_scans"]) == ("active", 0)
+    assert repo.get_listing(db, "a")["last_seen_at"] == at(3).isoformat()
+
+
+def test_scan_that_sees_exactly_half_of_known_listings_is_complete(db):
+    known = [make_listing(id=name) for name in "abcd"]
+    run_once(db, FakeSource([page(*known)]), SETTINGS, now=T0)
+    summary = run_once(db, FakeSource([page(*known[:2])]), SETTINGS, now=at(3))
+    assert summary.search_complete is True
+    assert repo.get_listing(db, "c")["missed_scans"] == 1
+
+
+def test_seen_share_counts_unparsable_ads_as_seen(db):
+    known = [make_listing(id=name) for name in "abcdefghij"]
+    run_once(db, FakeSource([page(*known)]), SETTINGS, now=T0)
+    drifted = page(*known[:4], errors=("объявление e: x",), unparsed=("e",))
+    summary = run_once(db, FakeSource([drifted]), SETTINGS, now=at(3))
+    assert summary.search_complete is True
+    assert repo.get_listing(db, "e")["missed_scans"] == 0
+    assert repo.get_listing(db, "f")["missed_scans"] == 1

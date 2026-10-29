@@ -75,6 +75,11 @@ def mark_unseen(conn: sqlite3.Connection, seen_ids: set[str], *, threshold: int)
     return removed
 
 
+def count_not_removed(conn: sqlite3.Connection) -> int:
+    """Сколько объявлений известно и не снято (active и filtered_out)."""
+    return conn.execute("SELECT COUNT(*) FROM listings WHERE status != 'removed'").fetchone()[0]
+
+
 def start_run(conn: sqlite3.Connection, now: datetime) -> int:
     cursor = conn.execute("INSERT INTO runs (started_at, status) VALUES (?, 'running')", (now.isoformat(),))
     return cursor.lastrowid

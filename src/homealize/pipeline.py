@@ -14,6 +14,7 @@ from homealize.storage.repo import UpsertOutcome
 log = logging.getLogger(__name__)
 
 MAX_UNPARSED_SHARE = 0.2  # больше этой доли нераспознанных объявлений: обход не считается надёжным
+MIN_SEEN_SHARE = 0.5  # обход, увидевший меньше этой доли известных объявлений, ничего не снимает
 
 
 def run_once(conn: sqlite3.Connection, source: Source, settings: Settings, *, now: datetime) -> RunSummary:
@@ -43,10 +44,11 @@ def run_once(conn: sqlite3.Connection, source: Source, settings: Settings, *, no
                 )
                 _count(summary, outcome)
             conn.commit()
-        if received > 0 and unparsed / received > MAX_UNPARSED_SHARE:
-            message = f"Слишком много нераспознанных объявлений: {unparsed} из {received} — снятие пропущено"
-            log.error(message)
-            summary.errors.append(message)
+        problems = _removal_problems(conn, seen | unparsed_ids, unparsed=unparsed, received=received)
+        if problems:
+            for message in problems:
+                log.error(message)
+            summary.errors.extend(problems)
         else:
             summary.removed = repo.mark_unseen(
                 conn, seen | unparsed_ids, threshold=settings.lifecycle.removal_missed_scans
@@ -69,6 +71,19 @@ def run_once(conn: sqlite3.Connection, source: Source, settings: Settings, *, no
         summary.changed, summary.removed, len(summary.errors),
     )
     return summary
+
+
+def _removal_problems(
+    conn: sqlite3.Connection, visible: set[str], *, unparsed: int, received: int
+) -> list[str]:
+    """Причины, по которым обходу нельзя доверять и снимать пропавшие объявления нельзя."""
+    problems = []
+    if received > 0 and unparsed / received > MAX_UNPARSED_SHARE:
+        problems.append(f"Слишком много нераспознанных объявлений: {unparsed} из {received} — снятие пропущено")
+    known = repo.count_not_removed(conn)
+    if known > 0 and len(visible) < MIN_SEEN_SHARE * known:
+        problems.append(f"Обход увидел {len(visible)} объявлений при {known} известных — снятие пропущено")
+    return problems
 
 
 def _count(summary: RunSummary, outcome: UpsertOutcome) -> None:
