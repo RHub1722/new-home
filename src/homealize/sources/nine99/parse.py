@@ -28,8 +28,8 @@ class Feature(_Raw, Generic[T]):
 
 
 class OptionValue(_Raw):
-    translated: str
-    value: int
+    translated: str | None = None
+    value: int | str | None = None
 
 
 class PriceValue(_Raw):
@@ -97,16 +97,34 @@ def parse_search_response(payload: dict[str, Any]) -> Page:
     try:
         envelope = _Envelope.model_validate(payload)
     except ValidationError as exc:
-        raise SourceSchemaError(f"неожиданная структура ответа SearchAds: {exc}") from exc
+        problems = "; ".join(f"{_location(e)}: {e['msg']}" for e in exc.errors(include_input=False)[:3])
+        raise SourceSchemaError(f"неожиданная структура ответа SearchAds: {problems}") from exc
 
     listings: list[Listing] = []
     errors: list[str] = []
+    unparsed_ids: list[str] = []
     for item in envelope.data.searchAds.ads:
         try:
             listings.append(to_listing(RawAd.model_validate(item)))
         except ValidationError as exc:
-            errors.append(f"объявление {item.get('id', '?')}: {exc.error_count()} ошибок разбора")
-    return Page(listings=listings, total_count=envelope.data.searchAds.count, parse_errors=errors)
+            ad_id = str(item.get("id") or "")
+            first = exc.errors(include_input=False)[0]
+            errors.append(
+                f"объявление {ad_id or '?'}: {_location(first)} — {first['msg']} (ошибок: {exc.error_count()})"
+            )
+            if ad_id:
+                unparsed_ids.append(ad_id)
+    return Page(
+        listings=listings,
+        total_count=envelope.data.searchAds.count,
+        parse_errors=errors,
+        unparsed_ids=unparsed_ids,
+    )
+
+
+def _location(error: Any) -> str:
+    """Путь к полю из ошибки pydantic; значения входных данных в текст не попадают."""
+    return ".".join(str(part) for part in error["loc"])
 
 
 def to_listing(raw: RawAd) -> Listing:

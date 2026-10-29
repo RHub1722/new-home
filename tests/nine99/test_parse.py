@@ -84,6 +84,36 @@ def test_broken_ad_is_reported_and_others_kept():
     assert "100000005" in page.parse_errors[0]
 
 
+def test_unparsable_ad_id_is_reported_in_unparsed_ids():
+    page = parse_search_response(load_fixture("search_page_2.json"))
+    assert page.unparsed_ids == ["100000005"]
+
+
+def test_parse_error_text_has_location_but_no_input_values():
+    page = parse_search_response(load_fixture("search_page_2.json"))
+    text = page.parse_errors[0]
+    assert "100000005" in text
+    assert "mapPoint" in text
+    assert "north" not in text
+
+
+def test_option_sub_field_drift_does_not_make_ad_unparsable():
+    payload = load_fixture("search_page_1.json")
+    payload["data"]["searchAds"]["ads"][0]["region"]["value"]["value"] = "x"
+    page = parse_search_response(payload)
+    assert page.parse_errors == []
+    assert page.unparsed_ids == []
+    assert page.listings[0].region == "Кишинёв мун."
+
+
+def test_ad_without_id_is_reported_but_has_no_unparsed_id():
+    payload = load_fixture("search_page_1.json")
+    del payload["data"]["searchAds"]["ads"][0]["id"]
+    page = parse_search_response(payload)
+    assert len(page.parse_errors) == 1
+    assert page.unparsed_ids == []
+
+
 def test_missing_price_is_none():
     ad = by_id("search_page_2.json")["100000006"]
     assert (ad.price_original, ad.currency) == (None, None)
@@ -103,6 +133,14 @@ def test_graphql_errors_raise_schema_error():
 def test_unexpected_structure_raises_schema_error():
     with pytest.raises(SourceSchemaError):
         parse_search_response({"data": {"somethingElse": {}}})
+
+
+def test_envelope_error_text_has_no_input_values():
+    payload = {"data": {"searchAds": {"ads": "secret-text", "count": 1}}}
+    with pytest.raises(SourceSchemaError) as caught:
+        parse_search_response(payload)
+    assert "secret-text" not in str(caught.value)
+    assert "searchAds" in str(caught.value)
 
 
 @pytest.mark.parametrize(

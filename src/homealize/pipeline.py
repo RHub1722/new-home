@@ -13,15 +13,22 @@ from homealize.storage.repo import UpsertOutcome
 
 log = logging.getLogger(__name__)
 
+MAX_UNPARSED_SHARE = 0.2  # больше этой доли нераспознанных объявлений: обход не считается надёжным
+
 
 def run_once(conn: sqlite3.Connection, source: Source, settings: Settings, *, now: datetime) -> RunSummary:
     summary = RunSummary()
     run_id = repo.start_run(conn, now)
     conn.commit()
     seen: set[str] = set()
+    unparsed_ids: set[str] = set()  # нераспознанные объявления: не сохраняем, но и пропавшими не считаем
+    unparsed = received = 0
     try:
         for page in source.iter_pages():
             summary.errors.extend(page.parse_errors)
+            unparsed_ids.update(page.unparsed_ids)
+            unparsed += len(page.parse_errors)
+            received += len(page.listings) + len(page.parse_errors)
             for listing in page.listings:
                 if listing.id in seen:
                     continue
@@ -36,8 +43,15 @@ def run_once(conn: sqlite3.Connection, source: Source, settings: Settings, *, no
                 )
                 _count(summary, outcome)
             conn.commit()
-        summary.removed = repo.mark_unseen(conn, seen, threshold=settings.lifecycle.removal_missed_scans)
-        summary.search_complete = True
+        if received > 0 and unparsed / received > MAX_UNPARSED_SHARE:
+            message = f"Слишком много нераспознанных объявлений: {unparsed} из {received} — снятие пропущено"
+            log.error(message)
+            summary.errors.append(message)
+        else:
+            summary.removed = repo.mark_unseen(
+                conn, seen | unparsed_ids, threshold=settings.lifecycle.removal_missed_scans
+            )
+            summary.search_complete = True
     except SourceError as exc:
         conn.rollback()
         log.error("Обход %s прерван: %s", source.name, exc)

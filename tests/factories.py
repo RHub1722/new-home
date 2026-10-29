@@ -48,8 +48,13 @@ def load_fixture(name: str) -> dict:
     return json.loads((FIXTURES / "nine99" / name).read_text(encoding="utf-8"))
 
 
-def page(*listings: Listing, errors: tuple[str, ...] = ()) -> Page:
-    return Page(listings=list(listings), total_count=len(listings), parse_errors=list(errors))
+def page(*listings: Listing, errors: tuple[str, ...] = (), unparsed: tuple[str, ...] = ()) -> Page:
+    return Page(
+        listings=list(listings),
+        total_count=len(listings),
+        parse_errors=list(errors),
+        unparsed_ids=list(unparsed),
+    )
 
 
 class FakeSource:

@@ -34,6 +34,7 @@ class Page:
     listings: list[Listing]
     total_count: int
     parse_errors: list[str] = field(default_factory=list)
+    unparsed_ids: list[str] = field(default_factory=list)
 
 
 class Source(Protocol):

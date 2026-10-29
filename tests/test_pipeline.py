@@ -67,8 +67,9 @@ def test_duplicates_across_pages_counted_once(db):
 
 
 def test_parse_errors_are_saved_in_run(db):
-    source = FakeSource([page(make_listing(id="a"), errors=("объявление x: 2 ошибок разбора",))])
+    source = FakeSource([page(*parsable(5), errors=("объявление x: 2 ошибок разбора",), unparsed=("x",))])
     summary = run_once(db, source, SETTINGS, now=T0)
+    assert summary.search_complete is True
     assert summary.errors == ["объявление x: 2 ошибок разбора"]
     assert json.loads(repo.last_run(db)["errors"]) == summary.errors
 
@@ -128,3 +129,72 @@ def test_end_to_end_with_999_fixtures_over_http(db):
         "100000006": ("filtered_out", "no_price"),
     }
     assert "[телефон удалён]" in repo.get_listing(db, "100000001")["description"]
+
+
+def parsable(count: int, start: int = 0) -> list:
+    return [make_listing(id=f"p{n}") for n in range(start, start + count)]
+
+
+def test_unparsable_ad_is_not_counted_as_missed(db):
+    run_once(db, FakeSource([page(make_listing(id="b"), *parsable(5))]), SETTINGS, now=T0)
+    drifted = page(*parsable(5), errors=("объявление b: region.value — ошибка (ошибок: 1)",), unparsed=("b",))
+    for hours in (3, 6):
+        summary = run_once(db, FakeSource([drifted]), SETTINGS, now=at(hours))
+        assert summary.search_complete is True
+        assert summary.removed == 0
+    row = repo.get_listing(db, "b")
+    assert (row["status"], row["missed_scans"]) == ("active", 0)
+
+
+def test_unparsable_ad_is_not_saved_or_counted_as_seen(db):
+    source = FakeSource([page(make_listing(id="a"), errors=("объявление b: x",), unparsed=("b",))])
+    summary = run_once(db, source, SETTINGS, now=T0)
+    assert (summary.ads_seen, summary.new) == (1, 1)
+    assert repo.get_listing(db, "b") is None
+
+
+def test_ad_unparsable_on_one_page_but_parsable_on_another_is_still_saved(db):
+    source = FakeSource([
+        page(make_listing(id="a"), errors=("объявление b: x",), unparsed=("b",)),
+        page(make_listing(id="b")),
+    ])
+    summary = run_once(db, source, SETTINGS, now=T0)
+    assert (summary.ads_seen, summary.new) == (2, 2)
+    assert repo.get_listing(db, "b")["status"] == "active"
+
+
+def test_too_many_unparsable_ads_skip_removal_and_fail_the_run(db):
+    run_once(db, FakeSource([page(make_listing(id="a"), make_listing(id="b"), make_listing(id="c"))]), SETTINGS, now=T0)
+    broken = page(make_listing(id="a"), errors=("объявление x: 1",), unparsed=("x",))
+    summary = run_once(db, FakeSource([broken]), SETTINGS, now=at(3))
+    assert summary.search_complete is False
+    assert summary.removed == 0
+    assert "Слишком много нераспознанных объявлений: 1 из 2 — снятие пропущено" in summary.errors
+    assert repo.last_run(db)["status"] == "failed"
+    assert repo.get_listing(db, "b")["missed_scans"] == 0
+    assert repo.get_listing(db, "a")["last_seen_at"] == at(3).isoformat()
+
+
+def test_unparsable_share_exactly_at_limit_is_allowed(db):
+    source = FakeSource([page(*parsable(4), errors=("объявление x: 1",), unparsed=("x",))])
+    assert run_once(db, source, SETTINGS, now=T0).search_complete is True
+
+
+def test_unparsable_share_counts_across_pages(db):
+    source = FakeSource([
+        page(*parsable(3), errors=("объявление x: 1",), unparsed=("x",)),
+        page(*parsable(1, start=3), errors=("объявление y: 1",), unparsed=("y",)),
+    ])
+    summary = run_once(db, source, SETTINGS, now=T0)
+    assert summary.search_complete is False
+    assert "Слишком много нераспознанных объявлений: 2 из 6 — снятие пропущено" in summary.errors
+
+
+def test_miss_seen_miss_keeps_listing_active(db):
+    both = [make_listing(id="a"), make_listing(id="b")]
+    run_once(db, FakeSource([page(*both)]), SETTINGS, now=T0)
+    run_once(db, FakeSource([page(both[0])]), SETTINGS, now=at(3))
+    run_once(db, FakeSource([page(*both)]), SETTINGS, now=at(6))
+    run_once(db, FakeSource([page(both[0])]), SETTINGS, now=at(9))
+    row = repo.get_listing(db, "b")
+    assert (row["status"], row["missed_scans"]) == ("active", 1)
