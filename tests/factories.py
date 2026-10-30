@@ -112,3 +112,47 @@ def score_record(listing_id: str, **overrides) -> dict:
     }
     base.update(overrides)
     return base
+
+
+class FakeTelegram:
+    """Telegram для тестов: запоминает отправленное.
+
+    errors — исключения для первых отправок по порядку; updates — ответы get_updates по порядку
+    (список обновлений или исключение).
+    """
+
+    def __init__(self, *, errors=(), updates=()):
+        self.sent: list[tuple[int, str, str | None]] = []
+        self.errors = list(errors)
+        self.updates = list(updates)
+        self.polls: list[tuple[int | None, int]] = []
+        self.closed = False
+
+    def send_message(self, chat_id, text, *, preview_url=None):
+        if self.errors:
+            raise self.errors.pop(0)
+        self.sent.append((chat_id, text, preview_url))
+
+    def get_updates(self, offset, timeout):
+        self.polls.append((offset, timeout))
+        if not self.updates:
+            return []
+        batch = self.updates.pop(0)
+        if isinstance(batch, Exception):
+            raise batch
+        return batch
+
+    def get_me(self):
+        return {"username": "homealize_test_bot"}
+
+    def close(self):
+        self.closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.close()
+
+    def texts(self) -> list[str]:
+        return [text for _chat, text, _preview in self.sent]
