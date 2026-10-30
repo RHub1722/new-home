@@ -62,11 +62,21 @@ scoring:
   weights: {price: 0.30, route: 0.20, infrastructure: 0.20, utilities: 0.20, settlement: 0.10}
   settlements_path: "config/settlements.yaml"
   max_price_eur: 50000           # бюджет: дороже — не в рейтинге, но учитывается в медианах
+  price_full_discount: 0.40      # на столько дешевле медианы — 100 баллов за цену, на столько дороже — 0
   suspicious_ratio: 0.25         # дешевле этой доли медианы — «подозрительно дёшево»
+  median_min_settlement: 5       # медиана по селу, если в нём столько объявлений
+  median_min_route_band: 8       # иначе по участкам с похожей дорогой, если их столько
+  median_route_band_km: 3        # «похожая дорога»: ± столько км до въезда
+  median_removed_days: 90        # снятые не раньше стольких дней назад тоже учитываются в медиане
   route_best_min: 5              # до въезда за столько минут или быстрее — 100 баллов
   route_worst_min: 30            # столько минут или дольше — 0 баллов
+  poi_full_m: 500                # объект инфраструктуры ближе — полный балл категории
+  poi_zero_m: 1500               # дальше — 0
   poi_weights: {supermarket: 0.30, school: 0.20, kindergarten: 0.15, pharmacy: 0.15, bus_stop: 0.10, clinic: 0.10}
   utility_weights: {electricity: 35, gas: 30, water: 25, sewerage: 10}
+  unknown_settlement_score: 50   # балл села, которого нет в справочнике
+  duplicate_distance_m: 50       # дубликат: та же площадь, ближе стольких метров
+  duplicate_price_tolerance: 0.10  # и цена отличается не больше чем на эту долю
 
 export:
   dir: "exports"
