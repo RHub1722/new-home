@@ -5,6 +5,7 @@ description = "Мониторинг участков под строительс
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.27",
+    "openpyxl>=3.1",
     "pydantic>=2.7",
     "pyyaml>=6.0",
 ]
