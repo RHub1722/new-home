@@ -1,6 +1,7 @@
 """Логи: файл с ротацией и консоль."""
 
 import logging
+import sys
 from logging.handlers import RotatingFileHandler
 
 from homealize.config import LoggingSettings
@@ -13,12 +14,13 @@ def configure_logging(cfg: LoggingSettings) -> None:
     reset_logging()
     cfg.path.parent.mkdir(parents=True, exist_ok=True)
     formatter = logging.Formatter(FORMAT)
-    file_handler = RotatingFileHandler(
-        cfg.path, maxBytes=cfg.max_bytes, backupCount=cfg.backup_count, encoding="utf-8"
-    )
-    console_handler = logging.StreamHandler()
+    handlers: list[logging.Handler] = [
+        RotatingFileHandler(cfg.path, maxBytes=cfg.max_bytes, backupCount=cfg.backup_count, encoding="utf-8")
+    ]
+    if sys.stderr is not None:  # под pythonw (автозапуск) консоли нет
+        handlers.append(logging.StreamHandler())
     root = logging.getLogger()
-    for handler in (file_handler, console_handler):
+    for handler in handlers:
         handler.setFormatter(formatter)
         setattr(handler, _MARK, True)
         root.addHandler(handler)

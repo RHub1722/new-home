@@ -1,4 +1,4 @@
-"""Командная строка: homealize init-db | run | rescore | export | refresh-poi | digest | telegram-test."""
+"""Командная строка: homealize init-db | run | rescore | export | refresh-poi | serve | digest | telegram-test."""
 
 import argparse
 import html
@@ -21,6 +21,7 @@ from homealize.models import RunSummary
 from homealize.notify.outbox import Delivery, Notifier
 from homealize.notify.telegram import TelegramClient, TelegramError
 from homealize.runlock import LockBusyError, hold_lock
+from homealize.serve import Service
 from homealize.settlements import load_settlements
 from homealize.sources.nine99.source import build_nine99_source
 from homealize.storage.db import connect, migrate
@@ -37,7 +38,7 @@ NO_TELEGRAM = (
     "Telegram не настроен: нужны TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID в .env "
     "(см. README, раздел «Telegram», и `uv run homealize telegram-test`)."
 )
-NEEDS_SETTLEMENTS = {"run", "rescore"}
+NEEDS_SETTLEMENTS = {"run", "rescore", "serve"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -51,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("rescore", help="пересчитать баллы и выгрузить Excel без обхода сайта")
     commands.add_parser("export", help="выгрузить Excel из уже посчитанных баллов")
     commands.add_parser("refresh-poi", help="заново скачать инфраструктуру из OpenStreetMap")
+    commands.add_parser("serve", help="прогоны по расписанию и Telegram-бот (работает, пока не остановят)")
     digest = commands.add_parser("digest", help="отправить дайджест дня сейчас")
     digest.add_argument("--dry-run", action="store_true", help="не отправлять, а показать")
     commands.add_parser("telegram-test", help="проверить бота и узнать chat id")
@@ -73,6 +75,7 @@ def main(argv: list[str] | None = None) -> int:
         "rescore": lambda: _rescore(settings),
         "export": lambda: _export(settings),
         "refresh-poi": lambda: _refresh_poi(settings),
+        "serve": lambda: _serve(settings),
         "digest": lambda: _digest(settings, dry_run=args.dry_run),
         "telegram-test": lambda: _telegram_test(settings),
     }
@@ -164,6 +167,49 @@ def _refresh_poi(settings: Settings) -> int:
         print(warning, file=sys.stderr)
         return EVALUATION_FAILED
     print(f"Инфраструктура обновлена: {len(pois)} объектов")
+    return 0
+
+
+def _serve(settings: Settings) -> int:
+    configure_logging(settings.logging)
+    try:
+        secrets = load_telegram_secrets(settings.telegram.env_file)
+    except ValueError as exc:
+        print(f"Не удалось прочитать {settings.telegram.env_file}: {exc}", file=sys.stderr)
+        return BAD_SETTINGS
+    if secrets is None or secrets.chat_id is None:
+        print(f"Для serve нужен Telegram. {NO_TELEGRAM}", file=sys.stderr)
+        return BAD_SETTINGS
+    try:
+        with hold_lock(settings.storage.serve_lock_path):
+            return _serve_locked(settings, Notifier(_telegram_client(settings, secrets.token), secrets.chat_id))
+    except LockBusyError:
+        print("serve уже запущен (например, автозапуском) — второй не нужен.", file=sys.stderr)
+        return BUSY
+
+
+def _serve_locked(settings: Settings, notifier: Notifier) -> int:
+    conn = connect(settings.storage.db_path)
+    try:
+        migrate(conn)
+
+        def run_job(now: datetime) -> None:
+            run_cycle(
+                conn,
+                settings,
+                source_factory=lambda: build_nine99_source(settings),
+                notifier=notifier,
+                now=now,
+                clock=_utc_now,
+            )
+
+        log.info("serve запущен")
+        Service(conn, settings, notifier, run_job=run_job).run_forever()
+    except KeyboardInterrupt:
+        log.info("serve остановлен")
+    finally:
+        conn.close()
+        notifier.client.close()
     return 0
 
 

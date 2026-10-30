@@ -1,11 +1,12 @@
 import json
 import logging
+import sys
 from pathlib import Path
 
 import pytest
 
 from homealize import cli, jobs
-from homealize.config import Settings
+from homealize.config import LoggingSettings, Settings
 from homealize.export.excel import ExportError
 from homealize.logging_setup import configure_logging, reset_logging
 from homealize.models import Poi
@@ -387,3 +388,39 @@ def test_telegram_test_sends_a_message(tmp_path, capsys, monkeypatch):
     assert cli.main(["--config", str(cfg), "telegram-test"]) == 0
     assert fake.sent == [(42, "✅ Homealize на связи. Команды: /help", None)]
     assert "@homealize_test_bot" in capsys.readouterr().out
+
+
+def test_serve_needs_telegram(tmp_path, capsys):
+    cfg = write_config(tmp_path)
+    assert cli.main(["--config", str(cfg), "serve"]) == 2
+    assert "Для serve нужен Telegram" in capsys.readouterr().err
+
+
+def test_second_serve_is_refused(tmp_path, capsys, monkeypatch):
+    cfg = write_config(tmp_path, env=TELEGRAM_ENV)
+    monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: FakeTelegram())
+    with hold_lock(tmp_path / "data" / "serve.lock"):
+        assert cli.main(["--config", str(cfg), "serve"]) == 4
+    assert "serve уже запущен" in capsys.readouterr().err
+
+
+def test_serve_runs_until_interrupted(tmp_path, monkeypatch):
+    cfg = write_config(tmp_path, env=TELEGRAM_ENV)
+    fake = FakeTelegram()
+    monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: fake)
+
+    def stop(self):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli.Service, "run_forever", stop)
+    assert cli.main(["--config", str(cfg), "serve"]) == 0
+    assert fake.closed
+
+
+def test_logging_without_a_console(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "stderr", None)  # так запускает pythonw (автозапуск)
+    configure_logging(LoggingSettings(path=tmp_path / "x.log"))
+    logging.getLogger("homealize.test").warning("без консоли")
+    assert not any(type(handler) is logging.StreamHandler for handler in logging.getLogger().handlers)
+    reset_logging()
+    assert "без консоли" in (tmp_path / "x.log").read_text(encoding="utf-8")
