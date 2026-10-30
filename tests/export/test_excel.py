@@ -85,38 +85,71 @@ def test_price_changes_sheet(db, tmp_path):
     add_listing(db, "a", now=T0 - timedelta(days=5), price_original=30000.0)
     add_listing(db, "a", now=T0 - timedelta(days=1), price_original=27000.0)
     path = export_workbook(db, ExportSettings(dir=tmp_path), now=T0)
-    rows = list(load_workbook(path)["Изменения цен"].iter_rows(min_row=2, values_only=True))
+    ws = load_workbook(path)["Изменения цен"]
+    rows = list(ws.iter_rows(min_row=2, values_only=True))
     assert rows == [
         ("2026-10-29", "Гратиешты", 6.0, 30000.0, 27000.0, "EUR", -10.0, "открыть"),
         ("2026-10-25", "Гратиешты", 6.0, 33000.0, 30000.0, "EUR", -9.1, "открыть"),
     ]
+    assert ws.cell(row=2, column=8).hyperlink.target == "https://999.md/ru/a"
+
+
+def test_price_change_with_currency_switch(db, tmp_path):
+    add_listing(db, "a", now=T0 - timedelta(days=5), price_original=30000.0)
+    add_listing(db, "a", now=T0 - timedelta(days=1), price_original=600000.0, currency="MDL")
+    path = export_workbook(db, ExportSettings(dir=tmp_path), now=T0)
+    rows = list(load_workbook(path)["Изменения цен"].iter_rows(min_row=2, values_only=True))
+    assert rows == [("2026-10-29", "Гратиешты", 6.0, 30000.0, 600000.0, "EUR→MDL", None, "открыть")]
+
+
+def test_price_changes_skip_filtered_listings(db, tmp_path):
+    for now, price in ((T0 - timedelta(days=5), 30000.0), (T0 - timedelta(days=1), 27000.0)):
+        repo.upsert_listing(db, make_listing(id="a", url="https://999.md/ru/a", price_original=price),
+                            status="filtered_out", filter_reason="not_construction", now=now)
+    db.commit()
+    path = export_workbook(db, ExportSettings(dir=tmp_path), now=T0)
+    assert list(load_workbook(path)["Изменения цен"].iter_rows(min_row=2, values_only=True)) == []
 
 
 def test_medians_sheet(db, tmp_path):
     add_listing(db, "a")
     add_listing(db, "b")
-    add_listing(db, "c")
+    add_listing(db, "c", settlement=None, region=None)
+    add_listing(db, "d")
     replace_scores(db, [
-        record("a", price_per_sot_eur=5000.0),
-        record("b", price_per_sot_eur=7000.0, excluded_reason="over_budget", rank=None),
-        record("c", price_per_sot_eur=100.0, excluded_reason="suspicious_price", rank=None),
+        record("a", market_median_eur_per_sot=6000.0, median_level="settlement", median_n=6),
+        record("b", market_median_eur_per_sot=6000.0, median_level="settlement", median_n=6,
+               excluded_reason="over_budget", rank=None),
+        record("c", market_median_eur_per_sot=4800.0, median_level="region", median_n=30, rank=2),
+        record("d", market_median_eur_per_sot=None, median_level=None, median_n=None,
+               excluded_reason="no_route", rank=None),
     ])
     db.commit()
     path = export_workbook(db, ExportSettings(dir=tmp_path), now=T0)
-    rows = list(load_workbook(path)["Медианы по сёлам"].iter_rows(min_row=2, values_only=True))
-    assert rows == [("Гратиешты", "Кишинёв мун.", 2, 6000)]
+    ws = load_workbook(path)["Медианы по сёлам"]
+    assert [cell.value for cell in ws[1]] == ["Село", "Район", "Уровень", "Объявлений в выборке", "Медиана €/сотка"]
+    rows = list(ws.iter_rows(min_row=2, values_only=True))
+    assert rows == [
+        ("не указано", "не указано", "весь регион", 30, 4800),
+        ("Гратиешты", "Кишинёв мун.", "село", 6, 6000),
+    ]
 
 
 def test_daily_copy_and_pruning(db, tmp_path):
     exports = tmp_path / "exports"
     exports.mkdir()
     (exports / "homealize_2026-09-01.xlsx").write_bytes(b"old")
+    (exports / "homealize_2026-09-30.xlsx").write_bytes(b"exactly keep_days old")
+    (exports / "homealize_2026-10-01.xlsx").write_bytes(b"kept")
     (exports / "homealize_2026-10-20.xlsx").write_bytes(b"recent")
+    (exports / "homealize_2026-13-01.xlsx").write_bytes(b"unparseable name")
     (exports / "notes.txt").write_text("keep", encoding="utf-8")
     export_workbook(db, ExportSettings(dir=exports, keep_days=30), now=T0)
     assert sorted(p.name for p in exports.iterdir()) == [
+        "homealize_2026-10-01.xlsx",
         "homealize_2026-10-20.xlsx",
         "homealize_2026-10-30.xlsx",
+        "homealize_2026-13-01.xlsx",
         "latest.xlsx",
         "notes.txt",
     ]
@@ -129,3 +162,27 @@ def test_locked_file_gives_export_error(db, tmp_path, monkeypatch):
     monkeypatch.setattr("homealize.export.excel.Workbook.save", locked)
     with pytest.raises(ExportError, match="открыт"):
         export_workbook(db, ExportSettings(dir=tmp_path), now=T0)
+
+
+def test_locked_daily_copy_gives_export_error(db, tmp_path, monkeypatch):
+    def locked(src, dst, *args, **kwargs):
+        raise PermissionError(13, "Permission denied", str(dst))
+
+    monkeypatch.setattr("homealize.export.excel.shutil.copyfile", locked)
+    with pytest.raises(ExportError, match="homealize_2026-10-30"):
+        export_workbook(db, ExportSettings(dir=tmp_path), now=T0)
+
+
+def test_prune_skips_locked_files(db, tmp_path, monkeypatch):
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    old = exports / "homealize_2026-09-01.xlsx"
+    old.write_bytes(b"old")
+
+    def locked(self, missing_ok=False):
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr("pathlib.Path.unlink", locked)
+    path = export_workbook(db, ExportSettings(dir=exports, keep_days=30), now=T0)
+    assert path == exports / "latest.xlsx"
+    assert old.exists()
