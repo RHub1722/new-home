@@ -88,7 +88,8 @@ def test_failure_uses_latest_cached_day(db):
     ensure_rates(db, client, CurrencySettings(), day=D1)
     rates, warning = ensure_rates(db, client, CurrencySettings(), day=date(2026, 10, 30))
     assert rates["EUR"] == 20.1303
-    assert "используется курс от 2026-10-29" in warning
+    assert "Курс BNM не получен (HTTP 500), используется курс от 2026-10-29" in warning
+    assert "http" not in warning
 
 
 def test_failure_without_cache(db):
@@ -96,6 +97,7 @@ def test_failure_without_cache(db):
     rates, warning = ensure_rates(db, client, CurrencySettings(), day=D1)
     assert rates is None
     assert "не пересчитаны" in warning
+    assert "Курс BNM не получен (HTTP 500)" in warning
 
 
 def test_bad_answer_falls_back_without_saving(db):

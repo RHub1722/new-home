@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import httpx
 
 from homealize.config import POI_CATEGORIES, PoiSettings
+from homealize.enrich.errors import describe_error
 from homealize.geo import haversine_m
 from homealize.models import Poi
 from homealize.storage import poi_cache
@@ -83,7 +84,7 @@ def ensure_pois(
     """POI из базы; обновляет их из Overpass, если данных нет, они старше refresh_days или force."""
     fetched = poi_cache.poi_fetched_at(conn)
     stale = force or fetched is None or now - fetched > timedelta(days=settings.refresh_days)
-    warning = None
+    failure = None
     if stale:
         try:
             pois = fetch_pois(client, settings)
@@ -91,9 +92,20 @@ def ensure_pois(
                 raise ValueError("Overpass вернул 0 объектов")
             poi_cache.replace_poi(conn, pois, now=now)
             conn.commit()
-        except (httpx.HTTPError, ValueError) as exc:
-            warning = f"POI не обновлены ({type(exc).__name__}: {exc}), используются сохранённые"
-    return poi_cache.load_poi(conn), warning
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            # KeyError, TypeError, AttributeError: ответ другой формы, чем ждёт parse_elements
+            failure = describe_error(exc)
+    cached = poi_cache.load_poi(conn)
+    warning = None
+    if failure is not None:
+        if cached:
+            warning = f"POI не обновлены ({failure}), используются сохранённые"
+        else:
+            warning = (
+                f"POI не обновлены ({failure}), сохранённых нет — инфраструктура не оценена; "
+                "выполните `uv run homealize refresh-poi`, затем `uv run homealize rescore`"
+            )
+    return cached, warning
 
 
 class PoiIndex:
@@ -103,6 +115,10 @@ class PoiIndex:
         self._by_category: dict[str, list[Poi]] = {category: [] for category in POI_CATEGORIES}
         for poi in pois:
             self._by_category.setdefault(poi.category, []).append(poi)
+
+    @property
+    def has_objects(self) -> bool:
+        return any(self._by_category.values())
 
     def nearest_m(self, lat: float, lon: float) -> dict[str, int | None]:
         dlat = SEARCH_RADIUS_M / _METERS_PER_DEGREE_LAT

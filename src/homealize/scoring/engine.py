@@ -243,7 +243,13 @@ def _components(
         suspicious=suspicious,
     )
     route = route_component(c.route, best_min=scoring.route_best_min, worst_min=scoring.route_worst_min)
-    infra = infra_component(nearest, weights=scoring.poi_weights, full_m=scoring.poi_full_m, zero_m=scoring.poi_zero_m)
+    infra = infra_component(
+        nearest,
+        weights=scoring.poi_weights,
+        full_m=scoring.poi_full_m,
+        zero_m=scoring.poi_zero_m,
+        data_available=services.poi_index.has_objects,
+    )
     utilities, utility_flags = utilities_component(
         {utility: c.row[f"has_{utility}"] for utility in scoring.utility_weights}, weights=scoring.utility_weights
     )

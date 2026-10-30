@@ -86,8 +86,15 @@ def route_component(route: Route | None, *, best_min: float, worst_min: float) -
 
 
 def infra_component(
-    nearest: dict[str, float | None], *, weights: dict[str, float], full_m: float, zero_m: float
+    nearest: dict[str, float | None],
+    *,
+    weights: dict[str, float],
+    full_m: float,
+    zero_m: float,
+    data_available: bool = True,
 ) -> Component:
+    if not data_available:  # POI ещё не скачаны: «нет ближе 1,5 км» было бы неправдой
+        return Component(0.0, "Инфраструктура не оценена: нет данных OpenStreetMap")
     total_weight = sum(weights.values())
     earned = 0.0
     parts = []

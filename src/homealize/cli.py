@@ -2,7 +2,9 @@
 
 import argparse
 import logging
+import sqlite3
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,7 +17,9 @@ from homealize.export.excel import ExportError, export_workbook
 from homealize.logging_setup import configure_logging
 from homealize.models import RunSummary
 from homealize.pipeline import run_once
+from homealize.scoring.engine import ScoreSummary
 from homealize.sources.nine99.source import build_nine99_source
+from homealize.storage import repo
 from homealize.storage.db import connect, migrate
 
 log = logging.getLogger(__name__)
@@ -70,13 +74,14 @@ def _run(settings: Settings) -> int:
         now = datetime.now(UTC)
         summary = run_once(conn, source, settings, now=now)
         _print_scan(summary)
-        evaluated = _evaluate_and_export(conn, settings, now=now)
+        evaluation = _evaluate_and_export(conn, settings, now=now)
+        _log_to_last_run(conn, evaluation.messages)
     finally:
         source.close()
         conn.close()
     if not summary.search_complete:
         return 1
-    return 0 if evaluated else EVALUATION_FAILED
+    return 0 if evaluation.ok else EVALUATION_FAILED
 
 
 def _rescore(settings: Settings) -> int:
@@ -84,10 +89,10 @@ def _rescore(settings: Settings) -> int:
     conn = connect(settings.storage.db_path)
     try:
         migrate(conn)
-        evaluated = _evaluate_and_export(conn, settings, now=datetime.now(UTC))
+        evaluation = _evaluate_and_export(conn, settings, now=datetime.now(UTC))
     finally:
         conn.close()
-    return 0 if evaluated else EVALUATION_FAILED
+    return 0 if evaluation.ok else EVALUATION_FAILED
 
 
 def _export(settings: Settings) -> int:
@@ -120,23 +125,49 @@ def _refresh_poi(settings: Settings) -> int:
     return 0
 
 
-def _evaluate_and_export(conn, settings: Settings, *, now: datetime) -> bool:
+@dataclass(frozen=True)
+class _Evaluation:
+    """Итог оценки и выгрузки: удались ли они и что дописать в журнал прогона."""
+
+    ok: bool
+    messages: list[str]
+
+
+def _evaluate_and_export(conn: sqlite3.Connection, settings: Settings, *, now: datetime) -> _Evaluation:
     try:
         with build_http_client() as http:
             result = evaluate(conn, settings, http, now=now)
-        path = export_workbook(conn, settings.export, now=now)
-    except ExportError as exc:
-        print(f"Excel не сохранён: {exc}", file=sys.stderr)
-        return False
+        try:
+            path = export_workbook(conn, settings.export, now=now)
+        except ExportError as exc:
+            message = f"Excel не сохранён: {exc}"
+            _print_evaluation(result, path=None)
+            print(message, file=sys.stderr)
+            return _Evaluation(False, [*result.warnings, message])
     except Exception as exc:  # оценка не должна терять уже сохранённый обход: сообщаем и выходим с кодом 3
+        conn.rollback()  # недописанное оценкой не должно попасть в базу вместе с записью в журнал прогона
         log.exception("Оценка не выполнена")
-        print(f"Оценка не выполнена: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return False
+        message = f"Оценка не выполнена: {type(exc).__name__}: {exc}"
+        print(message, file=sys.stderr)
+        return _Evaluation(False, [message])
+    _print_evaluation(result, path=path)
+    return _Evaluation(True, list(result.warnings))
+
+
+def _print_evaluation(result: ScoreSummary, *, path: Path | None) -> None:
     best = f"{result.best_total:.0f}" if result.best_total is not None else "—"
-    print(f"Оценка: оценено {result.scored}, в рейтинге {result.eligible}, лучший балл {best}. Excel: {path}")
+    line = f"Оценка: оценено {result.scored}, в рейтинге {result.eligible}, лучший балл {best}."
+    print(f"{line} Excel: {path}" if path is not None else line)
     for warning in result.warnings:
         print(f"Предупреждение: {warning}")
-    return True
+
+
+def _log_to_last_run(conn: sqlite3.Connection, messages: list[str]) -> None:
+    """Предупреждения и сбой оценки дописываются в errors прогона, который только что записал run_once."""
+    if not messages:
+        return
+    repo.add_run_errors(conn, repo.last_run(conn)["id"], messages)
+    conn.commit()
 
 
 def _print_scan(summary: RunSummary) -> None:

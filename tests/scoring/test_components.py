@@ -80,6 +80,16 @@ def test_infra_component():
     )
 
 
+def test_infra_component_without_poi_data():
+    c = infra_component({}, weights=POI_WEIGHTS, full_m=500, zero_m=1500, data_available=False)
+    assert (c.score, c.note) == (0.0, "Инфраструктура не оценена: нет данных OpenStreetMap")
+
+
+def test_infra_component_with_poi_data_by_default():
+    c = infra_component({"supermarket": 380}, weights=POI_WEIGHTS, full_m=500, zero_m=1500)
+    assert c.note.startswith("Инфраструктура 30: супермаркет 380 м")
+
+
 def test_utilities_component():
     c, flags = utilities_component({"electricity": 1, "gas": 1, "water": 1, "sewerage": 0}, weights=UTILITY_WEIGHTS)
     assert c.score == 90.0

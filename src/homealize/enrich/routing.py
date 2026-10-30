@@ -8,6 +8,7 @@ from datetime import datetime
 import httpx
 
 from homealize.config import RoutingSettings
+from homealize.enrich.errors import describe_error
 from homealize.models import Route
 from homealize.storage import route_cache
 
@@ -98,7 +99,7 @@ def ensure_routes(
         try:
             fresh = router.table(batch)
         except (httpx.HTTPError, RoutingError, ValueError, KeyError) as exc:
-            warning = f"Маршруты не посчитаны для {len(missing) - start} точек ({type(exc).__name__}: {exc})"
+            warning = f"Маршруты не посчитаны для {len(missing) - start} точек ({describe_error(exc)})"
             break
         route_cache.put_routes(conn, fresh, now=now)
         conn.commit()

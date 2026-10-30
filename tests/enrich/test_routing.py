@@ -88,7 +88,8 @@ def test_failure_keeps_finished_batches(db):
     points = {(46.1, 28.1), (46.2, 28.2), (46.3, 28.3)}
     routes, warning = ensure_routes(db, router, points, now=T0, sleep=lambda seconds: None)
     assert len(routes) == 2
-    assert "Маршруты не посчитаны для 1 точек" in warning
+    assert "Маршруты не посчитаны для 1 точек (HTTP 502)" in warning
+    assert "http" not in warning
     assert len(route_cache.get_routes(db)) == 2
 
 

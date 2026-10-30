@@ -175,6 +175,23 @@ def test_infrastructure_uses_poi_index(db):
     assert json.loads(row["components"])["infrastructure"] == pytest.approx(30.0)
 
 
+def test_infrastructure_note_says_not_scored_when_poi_index_is_empty(db):
+    add(db, "solo", 5000)
+    summary = rescore(db, SETTINGS, services(), now=T0)
+    row = scores(db)["solo"]
+    assert json.loads(row["explanations"])["infrastructure"] == "Инфраструктура не оценена: нет данных OpenStreetMap"
+    assert json.loads(row["components"])["infrastructure"] == 0.0
+    assert (row["excluded_reason"], row["rank"]) == (None, 1)
+    assert summary.eligible == 1
+
+
+def test_infrastructure_note_lists_distances_when_poi_index_has_objects(db):
+    add(db, "solo", 5000)
+    rescore(db, SETTINGS, services(pois=[Poi("node/1", "supermarket", "Linella", None, 46.9336, 28.940)]), now=T0)
+    note = json.loads(scores(db)["solo"]["explanations"])["infrastructure"]
+    assert note.startswith("Инфраструктура 30: супермаркет ")
+
+
 def test_rescore_replaces_previous_snapshot(db):
     six_normal(db)
     rescore(db, SETTINGS, services(), now=T0)

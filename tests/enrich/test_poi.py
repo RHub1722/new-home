@@ -99,6 +99,11 @@ def test_poi_index_finds_nearest_per_category():
     assert nearest["bus_stop"] is None
 
 
+def test_poi_index_knows_whether_it_has_objects():
+    assert not PoiIndex([]).has_objects
+    assert PoiIndex([Poi("node/1", "school", None, None, 47.0, 28.8)]).has_objects
+
+
 def test_ensure_pois_downloads_once_and_caches(db):
     client, calls = make_client([httpx.Response(200, json=PAYLOAD)])
     settings = PoiSettings(chains=CHAINS)
@@ -146,3 +151,49 @@ def test_partial_overpass_answer_keeps_old_pois(db):
     assert len(pois) == 3
     assert "POI не обновлены" in warning
     assert poi_cache.poi_fetched_at(db) == T0
+
+
+def test_failure_with_empty_cache_says_infrastructure_is_not_scored(db):
+    client, _ = make_client([httpx.Response(502)])
+    pois, warning = ensure_pois(db, client, PoiSettings(chains=CHAINS), now=T0)
+    assert pois == []
+    assert "POI не обновлены (HTTP 502)" in warning
+    assert "http" not in warning
+    assert "сохранённых нет — инфраструктура не оценена" in warning
+    assert "`uv run homealize refresh-poi`, затем `uv run homealize rescore`" in warning
+    assert "используются сохранённые" not in warning
+
+
+def test_failure_with_saved_pois_says_they_are_used(db):
+    client, _ = make_client([httpx.Response(200, json=PAYLOAD), httpx.Response(502)])
+    settings = PoiSettings(chains=CHAINS)
+    ensure_pois(db, client, settings, now=T0)
+    pois, warning = ensure_pois(db, client, settings, now=T0, force=True)
+    assert len(pois) == 3
+    assert warning == "POI не обновлены (HTTP 502), используются сохранённые"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"elements": "x"},  # AttributeError: у строки нет .get
+        {"elements": None},  # TypeError: None не перебирается
+        {"elements": [{"type": "node", "lat": 47.0, "lon": 28.8, "tags": {"amenity": "school"}}]},  # KeyError: нет id
+        [],  # AttributeError: ответ не объект
+    ],
+)
+def test_malformed_overpass_payload_falls_back_and_keeps_cache(db, payload):
+    client, _ = make_client([httpx.Response(200, json=PAYLOAD), httpx.Response(200, json=payload)])
+    settings = PoiSettings(chains=CHAINS)
+    ensure_pois(db, client, settings, now=T0)
+    pois, warning = ensure_pois(db, client, settings, now=T0 + timedelta(days=1), force=True)
+    assert len(pois) == 3
+    assert "POI не обновлены" in warning and "используются сохранённые" in warning
+    assert poi_cache.poi_fetched_at(db) == T0
+
+
+def test_malformed_overpass_payload_with_empty_cache_is_a_warning(db):
+    client, _ = make_client([httpx.Response(200, json={"elements": "x"})])
+    pois, warning = ensure_pois(db, client, PoiSettings(chains=CHAINS), now=T0)
+    assert pois == []
+    assert "сохранённых нет" in warning

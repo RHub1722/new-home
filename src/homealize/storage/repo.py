@@ -104,6 +104,17 @@ def finish_run(conn: sqlite3.Connection, run_id: int, summary: RunSummary, *, no
     )
 
 
+def add_run_errors(conn: sqlite3.Connection, run_id: int, messages: list[str]) -> None:
+    """Дописывает сообщения в JSON-список errors прогона; статус и счётчики не трогает."""
+    if not messages:
+        return
+    row = conn.execute("SELECT errors FROM runs WHERE id = ?", (run_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"Прогон {run_id} не найден")
+    errors = [*json.loads(row["errors"]), *messages]
+    conn.execute("UPDATE runs SET errors = ? WHERE id = ?", (json.dumps(errors, ensure_ascii=False), run_id))
+
+
 def get_listing(conn: sqlite3.Connection, listing_id: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM listings WHERE id = ?", (listing_id,)).fetchone()
 

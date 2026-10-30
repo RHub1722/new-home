@@ -1,6 +1,8 @@
 import json
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from homealize.models import RunSummary
 from homealize.storage import repo
 from homealize.storage.repo import UpsertOutcome
@@ -134,3 +136,37 @@ def test_run_lifecycle(db):
     assert row["finished_at"] == T1.isoformat()
     assert (row["ads_seen"], row["new"], row["changed"], row["price_changed"], row["removed"]) == (5, 2, 1, 1, 0)
     assert json.loads(row["errors"]) == ["объявление x: 1 ошибок разбора"]
+
+
+def test_add_run_errors_appends_without_committing(db):
+    run_id = repo.start_run(db, T0)
+    repo.finish_run(db, run_id, RunSummary(search_complete=True, errors=["первая"]), now=T1)
+    db.commit()
+    repo.add_run_errors(db, run_id, ["вторая", "третья"])
+    row = repo.last_run(db)
+    assert json.loads(row["errors"]) == ["первая", "вторая", "третья"]
+    assert "вторая" in row["errors"]  # кириллица хранится как есть, а не \uXXXX
+    assert (row["status"], row["search_complete"]) == ("ok", 1)
+    db.rollback()
+    assert json.loads(repo.last_run(db)["errors"]) == ["первая"]
+
+
+def test_add_run_errors_touches_only_the_given_run(db):
+    first = repo.start_run(db, T0)
+    second = repo.start_run(db, T1)
+    repo.add_run_errors(db, first, ["x"])
+    errors = {row["id"]: json.loads(row["errors"]) for row in db.execute("SELECT id, errors FROM runs")}
+    assert errors == {first: ["x"], second: []}
+
+
+def test_add_run_errors_without_messages_changes_nothing(db):
+    run_id = repo.start_run(db, T0)
+    db.commit()
+    repo.add_run_errors(db, run_id, [])
+    assert not db.in_transaction
+    assert json.loads(repo.last_run(db)["errors"]) == []
+
+
+def test_add_run_errors_for_unknown_run_is_an_error(db):
+    with pytest.raises(ValueError, match="42"):
+        repo.add_run_errors(db, 42, ["x"])

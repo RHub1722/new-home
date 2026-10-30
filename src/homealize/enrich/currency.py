@@ -8,6 +8,7 @@ from xml.etree import ElementTree
 import httpx
 
 from homealize.config import CurrencySettings
+from homealize.enrich.errors import describe_error
 from homealize.storage import rate_cache
 
 
@@ -45,7 +46,7 @@ def ensure_rates(
     try:
         rates = fetch_bnm_rates(client, settings, day)
     except (httpx.HTTPError, ValueError, ElementTree.ParseError) as exc:
-        message = f"Курс BNM не получен ({type(exc).__name__}: {exc})"
+        message = f"Курс BNM не получен ({describe_error(exc)})"
         latest = rate_cache.latest_rates(conn)
         if latest:
             return latest[1], f"{message}, используется курс от {latest[0]}"
