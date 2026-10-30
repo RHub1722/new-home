@@ -1,5 +1,6 @@
 """Официальный курс Нацбанка Молдовы (BNM) и перевод цен в евро."""
 
+import math
 import sqlite3
 from datetime import date
 from xml.etree import ElementTree
@@ -19,10 +20,15 @@ def fetch_bnm_rates(client: httpx.Client, settings: CurrencySettings, day: date)
     rates = {"MDL": 1.0}
     for valute in root.iter("Valute"):
         code = valute.findtext("CharCode")
-        value = valute.findtext("Value")
-        nominal = valute.findtext("Nominal") or "1"
-        if code and value:
-            rates[code] = float(value) / float(nominal)
+        try:
+            value = float(valute.findtext("Value") or "")
+            nominal = float(valute.findtext("Nominal") or "1")
+        except ValueError:
+            continue  # нечисловое значение: такую запись пропускаем
+        if code and nominal > 0:
+            rate = value / nominal
+            if math.isfinite(rate) and rate > 0:
+                rates[code] = rate
     if "EUR" not in rates:
         raise ValueError("в ответе BNM нет курса EUR")
     return rates
@@ -54,6 +60,6 @@ def to_eur(price: float | None, currency: str | None, rates: dict[str, float] | 
         return None
     if currency == "EUR":
         return price
-    if not rates or currency not in rates or "EUR" not in rates:
+    if not rates or currency not in rates or not rates.get("EUR", 0.0) > 0:
         return None
     return round(price * rates[currency] / rates["EUR"], 2)
