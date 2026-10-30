@@ -1,9 +1,17 @@
+from datetime import time
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from homealize.config import POI_CATEGORIES, UTILITIES, Settings, load_settings
+from homealize.config import (
+    POI_CATEGORIES,
+    UTILITIES,
+    Settings,
+    load_settings,
+    load_telegram_secrets,
+    parse_hhmm,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -94,3 +102,100 @@ def test_chain_names_must_be_plain():
 def test_unknown_poi_category_is_rejected():
     with pytest.raises(ValidationError):
         Settings.model_validate({"scoring": {"poi_weights": {"bank": 1.0}}})
+
+
+def test_stage3_defaults_match_spec():
+    s = Settings()
+    assert s.schedule.run_times == ["07:00", "10:00", "13:00", "16:00", "19:00", "22:00"]
+    assert (s.schedule.digest_time, s.schedule.timezone, s.schedule.catch_up_gap_minutes) == (
+        "20:00", "Europe/Chisinau", 60,
+    )
+    assert s.schedule.zone.key == "Europe/Chisinau"
+    t = s.telegram
+    assert (t.new_min_total, t.new_max_rank, t.max_new_per_run) == (70, 10, 10)
+    assert (t.price_drop_min_share, t.price_drop_min_total) == (0.05, 60)
+    assert (t.alert_repeat_hours, t.digest_top, t.top_default, t.top_max) == (6, 10, 10, 30)
+    assert s.storage.run_lock_path == Path("data/run.lock")
+    assert s.storage.serve_lock_path == Path("data/serve.lock")
+
+
+def test_parse_hhmm():
+    assert parse_hhmm("07:05") == time(7, 5)
+
+
+@pytest.mark.parametrize("value", ["7:00", "24:00", "07:60", "seven"])
+def test_bad_run_time_is_rejected(value):
+    with pytest.raises(ValidationError, match="ЧЧ:ММ"):
+        Settings.model_validate({"schedule": {"run_times": [value]}})
+
+
+def test_bad_digest_time_is_rejected():
+    with pytest.raises(ValidationError, match="ЧЧ:ММ"):
+        Settings.model_validate({"schedule": {"digest_time": "20-00"}})
+
+
+def test_run_times_are_sorted_and_unique():
+    s = Settings.model_validate({"schedule": {"run_times": ["13:00", "07:00"]}})
+    assert s.schedule.run_times == ["07:00", "13:00"]
+    with pytest.raises(ValidationError, match="повторяется"):
+        Settings.model_validate({"schedule": {"run_times": ["07:00", "07:00"]}})
+    with pytest.raises(ValidationError, match="хотя бы одно"):
+        Settings.model_validate({"schedule": {"run_times": []}})
+
+
+def test_unknown_timezone_is_rejected():
+    with pytest.raises(ValidationError, match="часовой пояс"):
+        Settings.model_validate({"schedule": {"timezone": "Mars/Olympus"}})
+
+
+def test_top_default_cannot_exceed_top_max():
+    with pytest.raises(ValidationError):
+        Settings.model_validate({"telegram": {"top_default": 40, "top_max": 30}})
+
+
+def test_env_file_is_read(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text(
+        "# комментарий\nTELEGRAM_BOT_TOKEN='123:abc'\nexport TELEGRAM_CHAT_ID=42\n\n", encoding="utf-8"
+    )
+    secrets = load_telegram_secrets(env, environ={})
+    assert (secrets.token, secrets.chat_id) == ("123:abc", 42)
+    assert "123:abc" not in repr(secrets)
+
+
+def test_env_file_with_bom(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("TELEGRAM_BOT_TOKEN=t\n", encoding="utf-8-sig")
+    assert load_telegram_secrets(env, environ={}).token == "t"
+
+
+def test_environment_overrides_env_file(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("TELEGRAM_BOT_TOKEN=file\nTELEGRAM_CHAT_ID=1\n", encoding="utf-8")
+    secrets = load_telegram_secrets(env, environ={"TELEGRAM_BOT_TOKEN": "env", "TELEGRAM_CHAT_ID": "2"})
+    assert (secrets.token, secrets.chat_id) == ("env", 2)
+
+
+def test_missing_token_means_telegram_is_off(tmp_path):
+    assert load_telegram_secrets(tmp_path / "нет.env", environ={}) is None
+    empty = tmp_path / ".env"
+    empty.write_text("TELEGRAM_BOT_TOKEN=\n", encoding="utf-8")
+    assert load_telegram_secrets(empty, environ={}) is None
+
+
+def test_token_without_chat_id(tmp_path):
+    secrets = load_telegram_secrets(tmp_path / "нет.env", environ={"TELEGRAM_BOT_TOKEN": "t"})
+    assert (secrets.token, secrets.chat_id) == ("t", None)
+
+
+def test_bad_chat_id_is_an_error(tmp_path):
+    with pytest.raises(ValueError, match="числом"):
+        load_telegram_secrets(tmp_path / "нет.env", environ={"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "abc"})
+
+
+def test_bad_env_line_is_an_error_without_its_value(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("TELEGRAM_BOT_TOKEN 123:secret\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="строка 1") as caught:
+        load_telegram_secrets(env, environ={})
+    assert "secret" not in str(caught.value)

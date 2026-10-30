@@ -24,6 +24,8 @@ filters:
 
 storage:
   db_path: "data/homealize.db"
+  run_lock_path: "data/run.lock"     # пока идёт прогон, второй не начнётся
+  serve_lock_path: "data/serve.lock" # второй serve не запустится
 
 lifecycle:
   removal_missed_scans: 2        # снимать объявление после стольких полных проходов без него
@@ -81,3 +83,21 @@ scoring:
 export:
   dir: "exports"
   keep_days: 30                  # сколько дней хранить дневные копии Excel
+
+schedule:
+  timezone: "Europe/Chisinau"
+  run_times: ["07:00", "10:00", "13:00", "16:00", "19:00", "22:00"]
+  digest_time: "20:00"
+  catch_up_gap_minutes: 60       # пропущенный прогон не догоняется, если до следующего меньше стольких минут
+
+telegram:
+  env_file: ".env"               # здесь TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID (см. .env.example)
+  new_min_total: 70              # «новый участок»: балл не ниже этого…
+  new_max_rank: 10               # …или место в рейтинге не ниже этого
+  max_new_per_run: 10            # больше за прогон не присылать, остальные — одной строкой
+  price_drop_min_share: 0.05     # «снижение цены»: хотя бы на эту долю…
+  price_drop_min_total: 60       # …и балл после снижения не ниже этого
+  alert_repeat_hours: 6          # одинаковая тех. тревога — не чаще
+  digest_top: 10                 # сколько мест показывать в дайджесте
+  top_default: 10                # /top без числа
+  top_max: 30                    # /top N: не больше
