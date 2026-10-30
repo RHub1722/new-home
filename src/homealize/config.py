@@ -239,7 +239,7 @@ class ScheduleSettings(_Section):
     def _known_zone(cls, value: str) -> str:
         try:
             ZoneInfo(value)
-        except (ZoneInfoNotFoundError, ValueError) as exc:
+        except (ZoneInfoNotFoundError, ValueError, OSError) as exc:  # OSError: «Europe» — каталог tzdata
             raise ValueError(f"timezone: неизвестный часовой пояс «{value}»") from exc
         return value
 
@@ -353,4 +353,7 @@ def load_telegram_secrets(path: Path, environ: Mapping[str, str] | None = None) 
     try:
         return TelegramSecrets(token, int(chat))
     except ValueError:
-        raise ValueError(f"{CHAT_VAR} должен быть числом, сейчас «{chat}»") from None
+        # значение не показываем: по ошибке туда могли вставить токен, а сообщение попадает в консоль и лог
+        raise ValueError(
+            f"{CHAT_VAR} должен быть целым числом — например 123456789 (узнать: uv run homealize telegram-test)"
+        ) from None

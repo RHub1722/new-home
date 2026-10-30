@@ -479,13 +479,29 @@ def test_serve_refusals_are_also_logged(tmp_path, monkeypatch):
 
     broken = write_config(tmp_path, env="TELEGRAM_BOT_TOKEN=t\nTELEGRAM_CHAT_ID=abc\n")
     assert cli.main(["--config", str(broken), "serve"]) == 2
-    assert "TELEGRAM_CHAT_ID должен быть числом" in serve_log(tmp_path)
+    assert "TELEGRAM_CHAT_ID должен быть целым числом" in serve_log(tmp_path)
 
     cfg = write_config(tmp_path, env=TELEGRAM_ENV)
     monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: FakeTelegram())
     with hold_lock(tmp_path / "data" / "serve.lock"):
         assert cli.main(["--config", str(cfg), "serve"]) == 4
     assert "serve уже запущен" in serve_log(tmp_path)
+
+
+@pytest.mark.parametrize("command", ["serve", "run", "digest", "telegram-test"])
+def test_token_pasted_into_the_chat_id_line_never_reaches_output_or_log(tmp_path, capsys, monkeypatch, command):
+    cfg = write_config(tmp_path, env="TELEGRAM_BOT_TOKEN=123456:REALTOKEN\nTELEGRAM_CHAT_ID=123456:SECRET\n")
+    monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: FakeTelegram())
+    assert cli.main(["--config", str(cfg), command]) == 2
+    captured = capsys.readouterr()
+    assert "TELEGRAM_CHAT_ID" in captured.err
+    assert "SECRET" not in captured.err + captured.out
+    reset_logging()  # закрыть файл лога перед чтением
+    log_file = tmp_path / "logs" / "test.log"
+    if log_file.exists():
+        assert "SECRET" not in log_file.read_text(encoding="utf-8")
+    if command == "serve":
+        assert "TELEGRAM_CHAT_ID" in log_file.read_text(encoding="utf-8")  # отказ при этом записан в лог
 
 
 def test_serve_crash_is_logged_and_cleaned_up(tmp_path, monkeypatch):

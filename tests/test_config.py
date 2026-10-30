@@ -143,9 +143,10 @@ def test_run_times_are_sorted_and_unique():
         Settings.model_validate({"schedule": {"run_times": []}})
 
 
-def test_unknown_timezone_is_rejected():
+@pytest.mark.parametrize("name", ["Mars/Olympus", "Europe"])  # «Europe» — каталог в tzdata: в Windows PermissionError
+def test_unknown_timezone_is_rejected(name):
     with pytest.raises(ValidationError, match="часовой пояс"):
-        Settings.model_validate({"schedule": {"timezone": "Mars/Olympus"}})
+        Settings.model_validate({"schedule": {"timezone": name}})
 
 
 def test_top_default_cannot_exceed_top_max():
@@ -189,8 +190,20 @@ def test_token_without_chat_id(tmp_path):
 
 
 def test_bad_chat_id_is_an_error(tmp_path):
-    with pytest.raises(ValueError, match="числом"):
+    with pytest.raises(ValueError, match="целым числом"):
         load_telegram_secrets(tmp_path / "нет.env", environ={"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "abc"})
+
+
+def test_bad_chat_id_error_never_contains_the_value(tmp_path):
+    """Токен, вставленный по ошибке в строку TELEGRAM_CHAT_ID, не должен попасть в сообщение (а значит, в лог)."""
+    env = tmp_path / ".env"
+    env.write_text("TELEGRAM_BOT_TOKEN=123456:REALTOKEN\nTELEGRAM_CHAT_ID=123456:SECRET\n", encoding="utf-8")
+    for environ in ({}, {"TELEGRAM_CHAT_ID": "123456:SECRET"}):
+        with pytest.raises(ValueError, match="TELEGRAM_CHAT_ID") as caught:
+            load_telegram_secrets(env, environ=environ)
+        message = str(caught.value)
+        assert "SECRET" not in message and "123456:" not in message
+        assert caught.value.__suppress_context__  # `from None`: исходная ошибка int() со значением не печатается
 
 
 def test_bad_env_line_is_an_error_without_its_value(tmp_path):
