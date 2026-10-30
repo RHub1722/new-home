@@ -83,3 +83,12 @@ class Poi:
     brand: str | None
     lat: float
     lon: float
+
+
+@dataclass(frozen=True)
+class Route:
+    """Путь на машине до ближайшей (по времени) точки въезда в Кишинёв."""
+
+    km: float
+    minutes: float
+    entry: str  # название точки въезда
