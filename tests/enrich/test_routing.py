@@ -90,3 +90,37 @@ def test_failure_keeps_finished_batches(db):
     assert len(routes) == 2
     assert "Маршруты не посчитаны для 1 точек" in warning
     assert len(route_cache.get_routes(db)) == 2
+
+
+def test_null_matrix_raises_routing_error():
+    router = router_with(lambda request: httpx.Response(200, json={"code": "Ok", "durations": None, "distances": None}))
+    with pytest.raises(RoutingError):
+        router.table([(46.93, 28.94)])
+
+
+def test_short_matrix_raises_routing_error():
+    router = router_with(lambda request: httpx.Response(
+        200, json={"code": "Ok", "durations": [[60, 120]], "distances": [[600, 1200]]}))
+    with pytest.raises(RoutingError):
+        router.table([(46.93, 28.94), (47.25, 28.73)])
+
+
+def test_ragged_row_raises_routing_error():
+    router = router_with(lambda request: httpx.Response(
+        200, json={"code": "Ok", "durations": [[60]], "distances": [[600]]}))
+    with pytest.raises(RoutingError):
+        router.table([(46.93, 28.94)])
+
+
+def test_non_dict_body_raises_routing_error():
+    router = router_with(lambda request: httpx.Response(200, json=[]))
+    with pytest.raises(RoutingError):
+        router.table([(46.93, 28.94)])
+
+
+def test_malformed_answer_becomes_warning(db):
+    router = router_with(lambda request: httpx.Response(200, json={"code": "Ok", "durations": None, "distances": None}))
+    routes, warning = ensure_routes(db, router, {(46.1, 28.1)}, now=T0, sleep=lambda seconds: None)
+    assert routes == {}
+    assert "Маршруты не посчитаны" in warning
+    assert route_cache.get_routes(db) == {}

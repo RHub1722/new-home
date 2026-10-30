@@ -21,6 +21,15 @@ def round_key(lat: float, lon: float) -> tuple[float, float]:
     return (round(lat, 3), round(lon, 3))
 
 
+def _matrix_ok(value: object, rows: int, cols: int) -> bool:
+    """Таблица OSRM: список из rows строк, в каждой по cols значений."""
+    return (
+        isinstance(value, list)
+        and len(value) == rows
+        and all(isinstance(row, list) and len(row) == cols for row in value)
+    )
+
+
 class OsrmRouter:
     def __init__(self, client: httpx.Client, settings: RoutingSettings) -> None:
         self._client = client
@@ -49,8 +58,13 @@ class OsrmRouter:
         response = self._client.get(url, timeout=self._settings.timeout_seconds)
         response.raise_for_status()
         data = response.json()
+        if not isinstance(data, dict):
+            raise RoutingError("OSRM вернул неожиданный ответ")
         if data.get("code") != "Ok":
             raise RoutingError(f"OSRM: {data.get('code')} {data.get('message', '')}".strip())
+        cols = len(entries)
+        if not (_matrix_ok(data.get("durations"), n, cols) and _matrix_ok(data.get("distances"), n, cols)):
+            raise RoutingError(f"OSRM вернул неполный ответ: ожидалось {n} строк")
         routes: dict[tuple[float, float], Route | None] = {}
         for point, durations, distances in zip(points, data["durations"], data["distances"]):
             best = None
