@@ -35,6 +35,7 @@ SCAN_INTERRUPTED = 1
 BAD_SETTINGS = 2
 EVALUATION_FAILED = 3  # оценка, Excel, обновление данных или Telegram не удались
 BUSY = 4
+SERVE_CRASHED = 1  # serve остановился из-за неожиданной ошибки
 BUSY_MESSAGE = "Другой прогон ещё идёт (например, по расписанию serve) — попробуйте через пару минут."
 NO_TELEGRAM = (
     "Telegram не настроен: нужны TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID в .env "
@@ -180,22 +181,27 @@ def _serve(settings: Settings) -> int:
     try:
         secrets = load_telegram_secrets(settings.telegram.env_file)
     except ValueError as exc:
-        print(f"Не удалось прочитать {settings.telegram.env_file}: {exc}", file=sys.stderr)
-        return BAD_SETTINGS
+        return _serve_refused(f"Не удалось прочитать {settings.telegram.env_file}: {exc}", BAD_SETTINGS)
     if secrets is None or secrets.chat_id is None:
-        print(f"Для serve нужен Telegram. {NO_TELEGRAM}", file=sys.stderr)
-        return BAD_SETTINGS
+        return _serve_refused(f"Для serve нужен Telegram. {NO_TELEGRAM}", BAD_SETTINGS)
     try:
         with hold_lock(settings.storage.serve_lock_path):
             return _serve_locked(settings, Notifier(_telegram_client(settings, secrets.token), secrets.chat_id))
     except LockBusyError:
-        print("serve уже запущен (например, автозапуском) — второй не нужен.", file=sys.stderr)
-        return BUSY
+        return _serve_refused("serve уже запущен (например, автозапуском) — второй не нужен.", BUSY)
+
+
+def _serve_refused(message: str, code: int) -> int:
+    """Отказ запускаться: в консоль и в лог (под pythonw консоли нет, и в автозапуске видно только лог)."""
+    print(message, file=sys.stderr)
+    log.error(message)
+    return code
 
 
 def _serve_locked(settings: Settings, notifier: Notifier) -> int:
-    conn = connect(settings.storage.db_path)
+    conn = None
     try:
+        conn = connect(settings.storage.db_path)
         migrate(conn)
 
         def run_job(now: datetime) -> None:
@@ -212,8 +218,12 @@ def _serve_locked(settings: Settings, notifier: Notifier) -> int:
         Service(conn, settings, notifier, run_job=run_job).run_forever()
     except KeyboardInterrupt:
         log.info("serve остановлен")
+    except Exception:
+        log.exception("serve остановлен из-за ошибки")
+        return SERVE_CRASHED
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
         notifier.client.close()
     return 0
 

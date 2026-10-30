@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from homealize.config import Settings
 from homealize.models import RunSummary
 from homealize.notify import outbox
@@ -153,3 +155,57 @@ def test_start_message(db):
     assert telegram.texts() == [
         "✅ Homealize запущен. Прогоны: 07:00, 10:00, 13:00, 16:00, 19:00, 22:00, дайджест в 20:00. Команды: /help"
     ]
+
+
+def test_run_forever_survives_an_unexpected_error(db, caplog):
+    telegram = FakeTelegram()
+    sleeps = []
+    s, _ = service(db, at(30, 11), telegram=telegram, sleeps=sleeps)
+    ticks = []
+
+    def tick():
+        ticks.append(None)
+        if len(ticks) == 1:
+            raise RuntimeError("база недоступна")
+        raise KeyboardInterrupt
+
+    s.tick = tick
+    with pytest.raises(KeyboardInterrupt):
+        s.run_forever()
+    assert len(ticks) == 2  # после сбоя цикл продолжился
+    assert sleeps == [5]
+    assert telegram.texts()[0].startswith("✅ Homealize запущен")
+    failed = [record for record in caplog.records if "Итерация serve упала" in record.getMessage()]
+    assert len(failed) == 1 and failed[0].exc_info is not None
+
+
+def test_database_error_inside_a_tick_is_survived(db, caplog):
+    telegram = FakeTelegram()
+    sleeps = []
+    s, _ = service(db, at(30, 11), telegram=telegram, sleeps=sleeps)
+    db.close()  # любая ошибка базы внутри tick(): сервис не должен умирать молча
+    ticks = []
+    real_tick = s.tick
+
+    def tick():
+        ticks.append(None)
+        if len(ticks) == 3:
+            raise KeyboardInterrupt
+        real_tick()
+
+    s.tick = tick
+    with pytest.raises(KeyboardInterrupt):
+        s.run_forever()
+    assert sleeps == [5, 5]
+    assert len([record for record in caplog.records if "Итерация serve упала" in record.getMessage()]) == 2
+
+
+def test_malformed_update_is_skipped_and_the_next_one_answered(db):
+    ran_at(db, at(30, 10))
+    update = {"update_id": 5, "message": {"chat": {"id": 42}, "text": "/status"}}
+    telegram = FakeTelegram(updates=[["мусор", 7, None, update]])
+    s, _ = service(db, at(30, 11), telegram=telegram)
+    s.tick()
+    s.tick()
+    assert telegram.texts()[0].startswith("<b>Последний прогон</b>")
+    assert [offset for offset, _timeout in telegram.polls] == [None, 6]

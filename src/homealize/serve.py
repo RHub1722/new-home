@@ -66,9 +66,15 @@ class Service:
         )
 
     def run_forever(self) -> None:
+        """Работает, пока не остановят (KeyboardInterrupt); неожиданная ошибка итерации не убивает службу."""
         self.start()
         while True:
-            self.tick()
+            try:
+                self.tick()
+            except Exception:  # под pythonw (автозапуск) консоли нет: без записи в лог сбой был бы невидим
+                self._rollback()
+                log.exception("Итерация serve упала")
+                self._sleep(POLL_RETRY_SECONDS[0])
 
     def tick(self) -> None:
         """Одна итерация: просроченный прогон, дайджест, досылка очереди, ожидание команд."""
@@ -92,7 +98,7 @@ class Service:
         except LockBusyError:
             log.info("Прогон по расписанию пропущен: идёт другой прогон")
         except Exception as exc:
-            self._conn.rollback()
+            self._rollback()
             log.exception("Прогон по расписанию упал")
             self._send(f"🛠 <b>Тех. тревога</b>: прогон упал\n{escape(short(f'{type(exc).__name__}: {exc}'))}")
 
@@ -100,7 +106,7 @@ class Service:
         try:
             send_digest(self._conn, self._settings, self._notifier, now=now, sleep=self._sleep)
         except Exception:
-            self._conn.rollback()
+            self._rollback()
             log.exception("Дайджест не отправлен")
 
     def _retry_pending(self, now: datetime) -> None:
@@ -112,7 +118,7 @@ class Service:
         try:
             deliver(self._conn, self._notifier, self._settings.telegram, now=now, sleep=self._sleep)
         except Exception:
-            self._conn.rollback()
+            self._rollback()
             log.exception("Очередь уведомлений не отправлена")
 
     def _poll(self) -> None:
@@ -129,6 +135,9 @@ class Service:
             return
         self._poll_failures = 0
         for update in updates:
+            if not isinstance(update, dict):
+                log.warning("Telegram прислал не сообщение, а %s — пропущено", type(update).__name__)
+                continue
             update_id = update.get("update_id")
             if isinstance(update_id, int):
                 self._offset = update_id + 1
@@ -137,8 +146,15 @@ class Service:
                 handle_update(self._conn, self._settings, self._notifier, update, now=moment,
                               next_run=self._schedule.next_run_slot(moment))
             except Exception:
-                self._conn.rollback()
+                self._rollback()
                 log.exception("Сообщение боту не обработано")
+
+    def _rollback(self) -> None:
+        """Откат после сбоя; сам сбой базы (закрытое или сломанное соединение) службу не останавливает."""
+        try:
+            self._conn.rollback()
+        except sqlite3.Error:
+            log.exception("Откат транзакции не удался")
 
     def _last_started(self) -> datetime | None:
         run = repo.last_run(self._conn)

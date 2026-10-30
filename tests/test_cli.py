@@ -1,5 +1,6 @@
 import json
 import logging
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -463,6 +464,57 @@ def test_serve_runs_until_interrupted(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.Service, "run_forever", stop)
     assert cli.main(["--config", str(cfg), "serve"]) == 0
     assert fake.closed
+
+
+def serve_log(tmp_path: Path) -> str:
+    reset_logging()  # закрыть файл лога перед чтением
+    return (tmp_path / "logs" / "test.log").read_text(encoding="utf-8")
+
+
+def test_serve_refusals_are_also_logged(tmp_path, monkeypatch):
+    """Под pythonw stderr нет: отказ должен остаться хотя бы в логе."""
+    cfg = write_config(tmp_path)
+    assert cli.main(["--config", str(cfg), "serve"]) == 2
+    assert "Для serve нужен Telegram" in serve_log(tmp_path)
+
+    broken = write_config(tmp_path, env="TELEGRAM_BOT_TOKEN=t\nTELEGRAM_CHAT_ID=abc\n")
+    assert cli.main(["--config", str(broken), "serve"]) == 2
+    assert "TELEGRAM_CHAT_ID должен быть числом" in serve_log(tmp_path)
+
+    cfg = write_config(tmp_path, env=TELEGRAM_ENV)
+    monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: FakeTelegram())
+    with hold_lock(tmp_path / "data" / "serve.lock"):
+        assert cli.main(["--config", str(cfg), "serve"]) == 4
+    assert "serve уже запущен" in serve_log(tmp_path)
+
+
+def test_serve_crash_is_logged_and_cleaned_up(tmp_path, monkeypatch):
+    cfg = write_config(tmp_path, env=TELEGRAM_ENV)
+    fake = FakeTelegram()
+    monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: fake)
+
+    def crash(self):
+        raise RuntimeError("неожиданно")
+
+    monkeypatch.setattr(cli.Service, "run_forever", crash)
+    assert cli.main(["--config", str(cfg), "serve"]) == 1
+    assert fake.closed
+    log_text = serve_log(tmp_path)
+    assert "serve остановлен из-за ошибки" in log_text and "RuntimeError: неожиданно" in log_text
+
+
+def test_serve_closes_telegram_when_the_database_does_not_open(tmp_path, monkeypatch):
+    cfg = write_config(tmp_path, env=TELEGRAM_ENV)
+    fake = FakeTelegram()
+    monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: fake)
+
+    def no_database(path):
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(cli, "connect", no_database)
+    assert cli.main(["--config", str(cfg), "serve"]) == 1
+    assert fake.closed
+    assert "unable to open database file" in serve_log(tmp_path)
 
 
 def test_logging_without_a_console(tmp_path, monkeypatch):
