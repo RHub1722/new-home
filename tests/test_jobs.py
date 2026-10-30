@@ -159,3 +159,14 @@ def test_crash_before_the_scan_alerts(db, settings):
     )
     assert (result.scan, result.run_id, result.crash) == (None, None, "RuntimeError: нет сети")
     assert telegram.texts()[0].startswith("🛠 <b>Тех. тревога</b>: прогон упал")
+
+
+def test_failed_first_scan_does_not_use_up_the_first_run_summary(db, settings):
+    telegram = FakeTelegram()
+    source = FakeSource([], fail_at=0, error=RateLimitedError("лимит"))
+    cycle(db, settings, now=T0, telegram=telegram, source=source)  # ничего не загружено: только тревога
+    assert not any("Первый прогон" in text for text in telegram.texts())
+
+    cycle(db, settings, plot("101"), plot("102"), now=T0 + timedelta(hours=3), telegram=telegram)
+    summaries = [text for text in telegram.texts() if "Первый прогон" in text]
+    assert len(summaries) == 1 and "загружено 2 участка" in summaries[0]

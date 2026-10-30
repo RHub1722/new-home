@@ -47,6 +47,20 @@ def test_first_run_sends_only_a_summary(db):
     assert "/ad_101" in items[0].text and "/ad_102" in items[0].text
 
 
+def test_a_run_that_loaded_nothing_does_not_use_up_the_first_run_summary(db):
+    empty_run = run(db, T0, notified=False)  # сайт не ответил на первой странице: ничего не загружено
+    assert plan_after_run(db, SETTINGS, run_id=empty_run, now=T0) == []
+    repo.mark_notified(db, empty_run, now=T0)  # run_cycle закрывает окно и для такого прогона
+
+    run_id = run(db, hours(3), notified=False)
+    listing(db, "101", hours(3))
+    listing(db, "102", hours(3))
+    replace_scores(db, [score_record("101", rank=1, total=75.0), score_record("102", rank=2, total=65.0)])
+    items = plan_after_run(db, SETTINGS, run_id=run_id, now=hours(3))
+    assert keys(items) == ["first_run"]
+    assert "загружено 2 участка, в рейтинге 2" in items[0].text
+
+
 def test_new_listing_from_this_run_is_announced_with_its_photo(db):
     run(db, T0)
     listing(db, "101", T0)

@@ -21,7 +21,8 @@ def plan_after_run(conn: sqlite3.Connection, settings: Settings, *, run_id: int,
     scored = load_scored(conn)
     favs = marks.marked(conn, marks.FAV)
     if not repo.has_listings_before(conn, since):
-        return [_first_run(conn, settings, scored, favs)]
+        summary = _first_run(conn, settings, scored, favs)
+        return [summary] if summary is not None else []
     return [
         *_new_listings(scored, settings, favs, since=since, run_id=run_id),
         *_price_drops(conn, scored, settings, favs, since=since),
@@ -40,10 +41,14 @@ def drop_share(before, after, rates: dict[str, float] | None) -> float | None:
     return (old - new) / old
 
 
-def _first_run(conn: sqlite3.Connection, settings: Settings, scored: list, favs: set[str]) -> Outgoing:
+def _first_run(conn: sqlite3.Connection, settings: Settings, scored: list, favs: set[str]) -> Outgoing | None:
+    """Сводка первого прогона; None, если ничего не загружено (например, сайт не ответил): ключ first_run
+    единственный, и пустая сводка потратила бы его — настоящая не пришла бы никогда."""
     loaded = conn.execute(
         "SELECT COUNT(*) FROM listings WHERE status = 'active' AND filter_reason IS NULL"
     ).fetchone()[0]
+    if not loaded:
+        return None
     rated = [row for row in scored if row["rank"] is not None]
     lines = [
         f"✅ <b>Первый прогон</b>: загружено {loaded} {fmt.plural(loaded, 'участок', 'участка', 'участков')}, "
