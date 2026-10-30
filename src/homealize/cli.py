@@ -18,6 +18,8 @@ from homealize.export.excel import ExportError, export_workbook
 from homealize.jobs import CycleResult, Evaluation, evaluate_and_export, run_cycle, send_digest
 from homealize.logging_setup import configure_logging
 from homealize.models import RunSummary
+from homealize.notify import outbox
+from homealize.notify.digest import digest_key
 from homealize.notify.outbox import Delivery, Notifier
 from homealize.notify.telegram import TelegramClient, TelegramError
 from homealize.runlock import LockBusyError, hold_lock
@@ -121,7 +123,10 @@ def _run(settings: Settings, *, dry_run: bool) -> int:
     _print_cycle(result, telegram=notifier is not None, dry_run=dry_run)
     if result.scan is None or not result.scan.search_complete:
         return SCAN_INTERRUPTED
-    return 0 if result.evaluation is not None and result.evaluation.ok else EVALUATION_FAILED
+    if result.evaluation is None or not result.evaluation.ok:
+        return EVALUATION_FAILED
+    delivery = result.delivery
+    return EVALUATION_FAILED if delivery is not None and (delivery.failed or delivery.dropped) else 0
 
 
 def _rescore(settings: Settings) -> int:
@@ -223,10 +228,17 @@ def _digest(settings: Settings, *, dry_run: bool) -> int:
     if notifier is None and not dry_run:
         print(NO_TELEGRAM, file=sys.stderr)
         return BAD_SETTINGS
+    now = _utc_now()
     conn = connect(settings.storage.db_path)
     try:
         migrate(conn)
-        item, added, delivery = send_digest(conn, settings, notifier, now=_utc_now(), dry_run=dry_run)
+        before = after = None
+        if not dry_run:  # состояние сегодняшнего дайджеста до отправки и после неё
+            key = digest_key(now.astimezone(settings.schedule.zone).date())
+            before = outbox.status(conn, key)
+        item, _added, delivery = send_digest(conn, settings, notifier, now=now, dry_run=dry_run)
+        if not dry_run:
+            after = outbox.status(conn, item.key)
     finally:
         conn.close()
         if notifier is not None:
@@ -234,11 +246,18 @@ def _digest(settings: Settings, *, dry_run: bool) -> int:
     if dry_run:
         print(_plain(item.text))
         return 0
-    if not added:
+    if before == "sent":
         print("Дайджест за сегодня уже отправлялся.")
         return 0
+    if before == "pending":
+        print("Дайджест за сегодня ждёт отправки.")
     _print_delivery(delivery)
-    return 0 if delivery.failed == 0 else EVALUATION_FAILED
+    if after == "dropped":
+        print(
+            f"Дайджест за сегодня отправить не удалось — подробности в {settings.logging.path.as_posix()}.",
+            file=sys.stderr,
+        )
+    return EVALUATION_FAILED if delivery.failed or delivery.dropped or after == "dropped" else 0
 
 
 def _telegram_test(settings: Settings) -> int:

@@ -110,6 +110,12 @@ def exists(conn: sqlite3.Connection, key: str) -> bool:
     return conn.execute("SELECT 1 FROM notifications WHERE key = ?", (key,)).fetchone() is not None
 
 
+def status(conn: sqlite3.Connection, key: str) -> str | None:
+    """Состояние сообщения с этим ключом: pending | sent | dropped; None — такого нет."""
+    row = conn.execute("SELECT status FROM notifications WHERE key = ?", (key,)).fetchone()
+    return row["status"] if row is not None else None
+
+
 def pending_count(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT COUNT(*) FROM notifications WHERE status = 'pending'").fetchone()[0]
 

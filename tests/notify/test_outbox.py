@@ -47,6 +47,17 @@ def test_enqueue_skips_known_keys(db):
     assert outbox.pending_count(db) == 1
 
 
+def test_status_of_a_key(db):
+    assert outbox.status(db, "new:a") is None
+    two(db)
+    outbox.enqueue(db, [Outgoing("new:c", "new", "C", listing_id="c")], now=T0)
+    fake = FakeTelegram(errors=[TelegramError("Bad Request", permanent=True)])
+    outbox.deliver(db, Notifier(fake, 42), SETTINGS, now=T0, sleep=lambda _s: None)
+    assert [outbox.status(db, key) for key in ("new:a", "new:b", "new:c", "new:d")] == ["dropped", "sent", "sent", None]
+    outbox.enqueue(db, [Outgoing("new:d", "new", "D", listing_id="d")], now=T0)
+    assert outbox.status(db, "new:d") == "pending"
+
+
 def test_deliver_sends_in_order_marks_sent_and_pauses_between(db):
     two(db)
     fake, sleeps = FakeTelegram(), []

@@ -10,6 +10,7 @@ from homealize.config import LoggingSettings, Settings
 from homealize.export.excel import ExportError
 from homealize.logging_setup import configure_logging, reset_logging
 from homealize.models import Poi
+from homealize.notify.telegram import TelegramError
 from homealize.runlock import hold_lock
 from homealize.scoring.engine import ScoreSummary
 from homealize.storage import repo
@@ -360,6 +361,53 @@ def test_digest_is_sent_once_a_day(tmp_path, capsys, monkeypatch):
     fake = FakeTelegram()
     monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: fake)
     assert cli.main(["--config", str(cfg), "digest"]) == 0
+    assert cli.main(["--config", str(cfg), "digest"]) == 0
+    assert "уже отправлялся" in capsys.readouterr().out
+    assert len(fake.sent) == 1
+
+
+def test_run_returns_3_when_telegram_delivery_fails(tmp_path, capsys, monkeypatch):
+    cfg = write_config(tmp_path, env=TELEGRAM_ENV)
+    fake = FakeTelegram(errors=[TelegramError("нет сети")])
+    monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: fake)
+    one_listing(monkeypatch)
+    assert cli.main(["--config", str(cfg), "run"]) == 3
+    assert "не удалось 1" in capsys.readouterr().out
+
+
+def test_run_returns_3_when_telegram_drops_a_notification(tmp_path, capsys, monkeypatch):
+    cfg = write_config(tmp_path, env=TELEGRAM_ENV)
+    fake = FakeTelegram(errors=[TelegramError("Bad Request", permanent=True)])
+    monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: fake)
+    one_listing(monkeypatch)
+    assert cli.main(["--config", str(cfg), "run"]) == 3
+    assert "отброшено 1" in capsys.readouterr().out
+
+
+def test_digest_rejected_for_good_exits_3_and_is_not_reported_as_sent(tmp_path, capsys, monkeypatch):
+    cfg = write_config(tmp_path, env=TELEGRAM_ENV)
+    fake = FakeTelegram(errors=[TelegramError("Bad Request", permanent=True)])
+    monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: fake)
+    assert cli.main(["--config", str(cfg), "digest"]) == 3
+    assert "отброшено 1" in capsys.readouterr().out
+    assert cli.main(["--config", str(cfg), "digest"]) == 3
+    captured = capsys.readouterr()
+    assert "отправить не удалось" in captured.err
+    assert "уже отправлялся" not in captured.out
+    assert fake.sent == []
+
+
+def test_digest_waiting_after_an_outage_is_retried_and_reported(tmp_path, capsys, monkeypatch):
+    cfg = write_config(tmp_path, env=TELEGRAM_ENV)
+    fake = FakeTelegram(errors=[TelegramError("нет сети")])
+    monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: fake)
+    assert cli.main(["--config", str(cfg), "digest"]) == 3
+    assert "не удалось 1" in capsys.readouterr().out
+    assert cli.main(["--config", str(cfg), "digest"]) == 0
+    out = capsys.readouterr().out
+    assert "ждёт отправки" in out and "уже отправлялся" not in out
+    assert "Telegram: отправлено 1" in out
+    assert len(fake.sent) == 1 and "Дайджест за" in fake.texts()[0]
     assert cli.main(["--config", str(cfg), "digest"]) == 0
     assert "уже отправлялся" in capsys.readouterr().out
     assert len(fake.sent) == 1
