@@ -133,6 +133,40 @@ def test_old_removed_listing_is_ignored(db):
     assert (row["median_level"], row["median_n"]) == ("region", 4)
 
 
+def four_active(db):
+    for i, pps in enumerate([4000, 5000, 6000, 7000]):
+        add(db, f"a{i}", pps, lat=46.930 + i * 0.002)
+
+
+def test_removed_repost_is_not_counted_twice(db):
+    four_active(db)
+    add(db, "old", 4100, lat=46.930, status="removed")
+    rescore(db, SETTINGS, services(), now=T0 + timedelta(days=1))
+    row = scores(db)["a0"]
+    assert (row["median_level"], row["median_n"]) == ("region", 4)
+    assert row["duplicate_group"] is not None
+    assert (row["is_group_primary"], row["excluded_reason"]) == (1, None)
+
+
+def test_active_listing_beats_cheaper_removed_copy(db):
+    four_active(db)
+    add(db, "old", 3900, lat=46.930, status="removed")
+    rescore(db, SETTINGS, services(), now=T0 + timedelta(days=1))
+    row = scores(db)["a0"]
+    assert (row["is_group_primary"], row["excluded_reason"]) == (1, None)
+
+
+def test_second_median_pass_drops_cheap_outliers(db):
+    for i, pps in enumerate([4000, 4500, 5000, 5500, 6000]):
+        add(db, f"n{i}", pps, lat=46.930 + i * 0.002)
+    for i in range(4):
+        add(db, f"c{i}", 100, lat=46.950 + i * 0.002)
+    rescore(db, SETTINGS, services(), now=T0)
+    s = scores(db)
+    assert (s["n2"]["market_median_eur_per_sot"], s["n2"]["median_n"]) == (5000, 5)
+    assert all(s[f"c{i}"]["excluded_reason"] == "suspicious_price" for i in range(4))
+
+
 def test_infrastructure_uses_poi_index(db):
     add(db, "solo", 5000)
     rescore(db, SETTINGS, services(pois=[Poi("node/1", "supermarket", "Linella", None, 46.9336, 28.940)]), now=T0)

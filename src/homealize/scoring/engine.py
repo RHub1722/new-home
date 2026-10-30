@@ -114,22 +114,23 @@ def rescore(conn: sqlite3.Connection, settings: Settings, services: Services, *,
     candidates = [_candidate(row, locations[row["id"]], services, city) for row in rows]
     active = [c for c in candidates if c.row["status"] == "active"]
 
-    duplicates = group_duplicates(
+    # Группы дубликатов строятся и по недавно снятым: снятая копия не должна дважды попадать в медиану.
+    groups = group_duplicates(
         [
             DupItem(c.row["id"], c.row["area_sot"], c.location.lat, c.location.lon, c.price_eur)
-            for c in active
+            for c in candidates
             if c.location is not None and not c.location.approx and c.price_eur is not None
         ],
         distance_m=scoring.duplicate_distance_m,
         price_tolerance=scoring.duplicate_price_tolerance,
     )
+    primaries = _primaries(candidates, groups)
 
     names = {c.row["settlement_id"]: c.row["settlement"] for c in candidates if c.row["settlement_id"] is not None}
     max_km = settings.routing.max_route_km
     market = [
         c for c in candidates
-        if c.route is not None and c.route.km <= max_km and c.price_per_sot is not None
-        and duplicates.get(c.row["id"], (None, True))[1]
+        if c.route is not None and c.route.km <= max_km and c.price_per_sot is not None and primaries[c.row["id"]]
     ]
     first_pass = _medians(market, scoring, names)
     clean = [
@@ -144,7 +145,8 @@ def rescore(conn: sqlite3.Connection, settings: Settings, services: Services, *,
     for c in active:
         market_median = medians.for_listing(c.row["settlement_id"], c.route.km if c.route else None)
         suspicious = is_suspicious(c.price_per_sot, market_median, scoring.suspicious_ratio)
-        group, primary = duplicates.get(c.row["id"], (None, True))
+        group = groups.get(c.row["id"], (None, True))[0]
+        primary = primaries[c.row["id"]]
         nearest = services.poi_index.nearest_m(c.location.lat, c.location.lon) if c.location else {}
         components, flags = _components(c, market_median, suspicious, nearest, services, scoring)
         records.append({
@@ -198,6 +200,20 @@ def _candidate(row: sqlite3.Row, location: Location | None, services: Services, 
     area = row["area_sot"]
     price_per_sot = round(price_eur / area, 2) if price_eur is not None and area else None
     return _Candidate(row, location, route, in_city, price_eur, price_per_sot)
+
+
+def _primaries(candidates: list[_Candidate], groups: dict[str, tuple[str, bool]]) -> dict[str, bool]:
+    """id -> главное ли объявление: вне групп все главные, в группе одно (активное важнее снятой, потом дешевле)."""
+    members: dict[str, list[_Candidate]] = defaultdict(list)
+    for c in candidates:
+        if c.row["id"] in groups:
+            members[groups[c.row["id"]][0]].append(c)
+    primaries = {c.row["id"]: True for c in candidates}
+    for group in members.values():
+        best = min(group, key=lambda c: (c.row["status"] != "active", c.price_eur, c.row["id"]))
+        for c in group:
+            primaries[c.row["id"]] = c is best
+    return primaries
 
 
 def _medians(candidates: list[_Candidate], scoring: ScoringSettings, names: dict[int, str]) -> MarketMedians:
