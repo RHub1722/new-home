@@ -5,7 +5,7 @@
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from homealize.models import Listing, RunSummary
@@ -131,6 +131,27 @@ def close_stale_runs(conn: sqlite3.Connection) -> int:
         conn.execute("UPDATE runs SET status = 'failed' WHERE id = ?", (row["id"],))
         add_run_errors(conn, row["id"], [STALE_RUN_MESSAGE])
     return len(rows)
+
+
+def has_listings_before(conn: sqlite3.Connection, ts: str) -> bool:
+    """Были ли объявления, впервые увиденные раньше ts (если нет — это первый прогон)."""
+    return conn.execute("SELECT 1 FROM listings WHERE first_seen_at < ? LIMIT 1", (ts,)).fetchone() is not None
+
+
+def notify_window_start(conn: sqlite3.Connection, run_id: int, *, not_before: str) -> str:
+    """Начало окна «новых»: первый прогон после последнего, по которому уже готовились уведомления.
+
+    Не раньше not_before: после долгого перерыва старое не присылается.
+    """
+    last = conn.execute(
+        "SELECT COALESCE(MAX(id), 0) FROM runs WHERE notified_at IS NOT NULL AND id < ?", (run_id,)
+    ).fetchone()[0]
+    first = conn.execute("SELECT MIN(started_at) FROM runs WHERE id > ? AND id <= ?", (last, run_id)).fetchone()[0]
+    return max(first, not_before)
+
+
+def mark_notified(conn: sqlite3.Connection, run_id: int, *, now: datetime) -> None:
+    conn.execute("UPDATE runs SET notified_at = ? WHERE id = ?", (now.astimezone(UTC).isoformat(), run_id))
 
 
 def get_listing(conn: sqlite3.Connection, listing_id: str) -> sqlite3.Row | None:

@@ -185,6 +185,26 @@ def test_close_stale_runs_marks_running_as_failed(db):
     assert repo.close_stale_runs(db) == 0
 
 
+def test_notify_window_starts_after_the_last_notified_run(db):
+    first = repo.start_run(db, T0)
+    repo.mark_notified(db, first, now=T0)
+    second = repo.start_run(db, T1)
+    third = repo.start_run(db, T1 + timedelta(hours=3))
+    day_ago = (T0 - timedelta(days=1)).isoformat()
+    assert repo.notify_window_start(db, third, not_before=day_ago) == T1.isoformat()
+    assert repo.notify_window_start(db, second, not_before=day_ago) == T1.isoformat()
+    assert repo.notify_window_start(db, third, not_before=(T1 + timedelta(hours=1)).isoformat()) == (
+        T1 + timedelta(hours=1)
+    ).isoformat()
+    assert db.execute("SELECT notified_at FROM runs WHERE id = ?", (first,)).fetchone()[0] == T0.isoformat()
+
+
+def test_has_listings_before(db):
+    save(db, make_listing(id="a"), now=T1)
+    assert repo.has_listings_before(db, (T1 + timedelta(seconds=1)).isoformat())
+    assert not repo.has_listings_before(db, T1.isoformat())
+
+
 def test_mark_unseen_counts_only_active_listings(db):
     save(db, make_listing(id="a"))
     save(db, make_listing(id="f"), status="filtered_out", reason="region")
