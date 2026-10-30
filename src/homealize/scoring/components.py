@@ -34,6 +34,7 @@ EXCLUSION_LABELS = {
     "over_budget": "дороже бюджета",
     "suspicious_price": "подозрительно дёшево",
     "duplicate": "дубликат более дешёвого объявления",
+    "hidden": "скрыто вами",
 }
 
 

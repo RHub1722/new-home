@@ -11,8 +11,10 @@ def tables(conn) -> set[str]:
 
 def test_migrate_creates_latest_schema():
     conn = connect(":memory:")
-    assert migrate(conn) == 2
-    assert {"listings", "price_history", "runs", "poi", "route_cache", "fx_rates", "scores"} <= tables(conn)
+    assert migrate(conn) == 3
+    assert {"listings", "price_history", "runs", "poi", "route_cache", "fx_rates", "scores", "notifications",
+            "user_marks"} <= tables(conn)
+    assert "notified_at" in {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(listings)")}
     assert {"region_id", "settlement_id"} <= columns
 
@@ -20,7 +22,7 @@ def test_migrate_creates_latest_schema():
 def test_migrate_twice_is_noop():
     conn = connect(":memory:")
     migrate(conn)
-    assert migrate(conn) == 2
+    assert migrate(conn) == 3
 
 
 def test_upgrade_from_v1_keeps_listings(tmp_path):
@@ -35,7 +37,7 @@ def test_upgrade_from_v1_keeps_listings(tmp_path):
             "VALUES ('a', '999', 'u', 't', 'private', 'now', 'now', 'active')"
         )
         conn.commit()
-        assert migrate(conn) == 2
+        assert migrate(conn) == 3
         row = conn.execute("SELECT id, region_id, settlement_id FROM listings").fetchone()
         assert (row["id"], row["region_id"], row["settlement_id"]) == ("a", None, None)
     finally:

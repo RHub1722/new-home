@@ -78,3 +78,37 @@ class FakeSource:
 
     def close(self) -> None:
         self.closed = True
+
+
+def score_record(listing_id: str, **overrides) -> dict:
+    """Строка снимка scores для тестов: в рейтинге на 1-м месте, балл 70; поля можно переопределить."""
+    base = {
+        "listing_id": listing_id,
+        "computed_at": "2026-10-30T05:00:00+00:00",
+        "price_eur": 28000.0,
+        "price_per_sot_eur": 4666.67,
+        "lat": 47.09921,
+        "lon": 28.8165,
+        "coords_approx": False,
+        "route_km": 8.0,
+        "route_min": 10.0,
+        "nearest_entry": "M3 Drumul Băcioiului",
+        "poi_nearest_m": "{}",
+        "market_median_eur_per_sot": 5600.0,
+        "median_level": "settlement",
+        "median_n": 6,
+        "duplicate_group": None,
+        "is_group_primary": True,
+        "components": json.dumps(
+            {"price": 66.7, "route": 80.0, "infrastructure": 30.0, "utilities": 90.0, "settlement": 50.0}
+        ),
+        "explanations": json.dumps(
+            {"price": "Цена 67: на 17% дешевле медианы", "route": "Дорога 80: 10 мин до въезда"}, ensure_ascii=False
+        ),
+        "flags": json.dumps(["no_sewerage"]),
+        "total": 70.0,
+        "excluded_reason": None,
+        "rank": 1,
+    }
+    base.update(overrides)
+    return base

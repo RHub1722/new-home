@@ -10,7 +10,7 @@ from homealize.models import Poi, Route
 from homealize.scoring.components import IN_CITY_ENTRY
 from homealize.scoring.engine import Services, rescore, route_points
 from homealize.settlements import SettlementRef
-from homealize.storage import repo
+from homealize.storage import marks, repo
 from tests.factories import make_listing
 
 T0 = datetime(2026, 10, 30, 7, 0, tzinfo=UTC)
@@ -207,3 +207,21 @@ def test_route_points(db):
                         status="filtered_out", filter_reason="region", now=T0)
     db.commit()
     assert route_points(db, SETTINGS, now=T0) == {round_key(46.93012, 28.94049)}
+
+
+def test_hidden_listing_is_excluded_and_others_move_up(db):
+    six_normal(db)
+    marks.add_mark(db, "n0", marks.HIDDEN, now=T0)
+    summary = rescore(db, SETTINGS, services(), now=T0)
+    s = scores(db)
+    assert (s["n0"]["excluded_reason"], s["n0"]["rank"]) == ("hidden", None)
+    assert sorted(row["rank"] for row in s.values() if row["rank"] is not None) == [1, 2, 3, 4, 5]
+    assert summary.eligible == 5
+
+
+def test_hidden_mark_does_not_replace_a_more_specific_reason(db):
+    six_normal(db)
+    add(db, "big", 9000, area=10.0)  # 90 000 € — дороже бюджета
+    marks.add_mark(db, "big", marks.HIDDEN, now=T0)
+    rescore(db, SETTINGS, services(), now=T0)
+    assert scores(db)["big"]["excluded_reason"] == "over_budget"

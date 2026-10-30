@@ -62,7 +62,7 @@ def test_init_db_creates_database(tmp_path, capsys):
     cfg = write_config(tmp_path)
     assert cli.main(["--config", str(cfg), "init-db"]) == 0
     assert (tmp_path / "data" / "test.db").exists()
-    assert "схема v2" in capsys.readouterr().out
+    assert "схема v3" in capsys.readouterr().out
 
 
 def test_run_saves_listings_and_prints_summary(tmp_path, capsys, monkeypatch):

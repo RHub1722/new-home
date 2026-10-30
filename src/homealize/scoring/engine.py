@@ -27,7 +27,8 @@ from homealize.scoring.components import (
 )
 from homealize.scoring.market import DupItem, MarketItem, MarketMedians, Median, group_duplicates, is_suspicious
 from homealize.settlements import SettlementRef
-from homealize.storage.scores import replace_scores
+from homealize.storage import marks
+from homealize.storage.scores import assign_ranks, replace_scores
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,7 @@ def rescore(conn: sqlite3.Connection, settings: Settings, services: Services, *,
     city = set(settings.routing.city_settlement_ids)
     candidates = [_candidate(row, locations[row["id"]], services, city) for row in rows]
     active = [c for c in candidates if c.row["status"] == "active"]
+    hidden = marks.marked(conn, marks.HIDDEN)
 
     # Группы дубликатов строятся и по недавно снятым: снятая копия не должна дважды попадать в медиану.
     groups = group_duplicates(
@@ -170,21 +172,17 @@ def rescore(conn: sqlite3.Connection, settings: Settings, services: Services, *,
             "explanations": json.dumps({name: comp.note for name, comp in components.items()}, ensure_ascii=False),
             "flags": json.dumps(flags, ensure_ascii=False),
             "total": weighted_total(components, scoring.weights),
-            "excluded_reason": _excluded_reason(c, suspicious, primary, settings),
+            "excluded_reason": _excluded_reason(c, suspicious, primary, settings, hidden),
             "rank": None,
         })
 
-    eligible = sorted(
-        (r for r in records if r["excluded_reason"] is None),
-        key=lambda r: (-r["total"], r["price_eur"], r["listing_id"]),
-    )
-    for position, record in enumerate(eligible, start=1):
-        record["rank"] = position
+    eligible = [r for r in records if r["excluded_reason"] is None]
     replace_scores(conn, records)
+    assign_ranks(conn)  # места считает снимок: так же их пересчитывают /hide и /unhide
     return ScoreSummary(
         scored=len(records),
         eligible=len(eligible),
-        best_total=eligible[0]["total"] if eligible else None,
+        best_total=max((r["total"] for r in eligible), default=None),
     )
 
 
@@ -273,7 +271,9 @@ def _components(
     return components, flags
 
 
-def _excluded_reason(c: _Candidate, suspicious: bool, primary: bool, settings: Settings) -> str | None:
+def _excluded_reason(
+    c: _Candidate, suspicious: bool, primary: bool, settings: Settings, hidden: set[str]
+) -> str | None:
     if c.location is None and not c.in_city:
         return "no_coords"
     if c.route is None:
@@ -288,4 +288,6 @@ def _excluded_reason(c: _Candidate, suspicious: bool, primary: bool, settings: S
         return "suspicious_price"
     if not primary:
         return "duplicate"
+    if c.row["id"] in hidden:
+        return "hidden"
     return None
