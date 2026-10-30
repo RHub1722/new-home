@@ -71,3 +71,15 @@ class RunSummary:
     @property
     def status(self) -> str:
         return "ok" if self.search_complete else "failed"
+
+
+@dataclass(frozen=True)
+class Poi:
+    """Объект инфраструктуры из OpenStreetMap (контакты организаций не храним)."""
+
+    key: str  # "node/123", "way/456"
+    category: str  # одна из config.POI_CATEGORIES
+    name: str | None
+    brand: str | None
+    lat: float
+    lon: float
