@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from homealize.sources.base import SourceSchemaError
+from homealize.sources.base import SourceSchemaError, SourceUnavailableError
 from homealize.sources.nine99.parse import IMAGE_URL, parse_search_response, scrub_phones
 from tests.factories import load_fixture
 
@@ -189,3 +189,20 @@ def test_phone_in_title_and_street_is_removed():
     parsed = parse_search_response(payload).listings[0]
     assert parsed.title == "Участок 6 сот., тел [телефон удалён]"
     assert parsed.street == "str. Mihai Viteazul, [телефон удалён]"
+
+
+def test_graphql_server_error_is_temporary():
+    payload = {"errors": [{"message": "internal error", "extensions": {"code": "INTERNAL_SERVER_ERROR"}}], "data": None}
+    with pytest.raises(SourceUnavailableError, match="временную"):
+        parse_search_response(payload)
+
+
+def test_graphql_validation_code_is_schema_error():
+    payload = {"errors": [{"message": "x", "extensions": {"code": "GRAPHQL_VALIDATION_FAILED"}}]}
+    with pytest.raises(SourceSchemaError, match="GraphQL"):
+        parse_search_response(payload)
+
+
+def test_graphql_unknown_argument_is_schema_error():
+    with pytest.raises(SourceSchemaError):
+        parse_search_response({"errors": [{"message": 'Unknown argument "skip" on field "searchAds"'}]})

@@ -11,13 +11,23 @@ from homealize.sources.base import RateLimitedError, SourceSchemaError, SourceUn
 
 log = logging.getLogger(__name__)
 
-RATE_LIMIT_MARKER = "request_limit"
+RATE_LIMIT_MARKER = "999.md_request_limit"
 RETRY_CLIENT_STATUSES = {408, 429}
+FORBIDDEN_STATUSES = {401, 403}  # сайт не пускает: это недоступность, а не изменение схемы
 
 
 def is_retryable_status(status: int) -> bool:
     """Повторяем 408, 429 и любой 5xx (в том числе CDN-коды вроде 522), остальное — нет."""
     return status in RETRY_CLIENT_STATUSES or status >= 500
+
+
+def is_rate_limit_page(response: httpx.Response) -> bool:
+    """Страница лимита: переадресация на неё или ссылка на неё в HTML. В JSON-ответе маркер не ищем."""
+    if RATE_LIMIT_MARKER in str(response.url):
+        return True
+    if "json" in response.headers.get("content-type", ""):
+        return False
+    return RATE_LIMIT_MARKER in response.text[:2000]
 
 
 class PoliteClient:
@@ -53,18 +63,22 @@ class PoliteClient:
         attempt = 0
         while True:
             self._pause_between_requests()
+            cause: Exception | None = None
             try:
                 response = self._client.post(path, json=payload)
-            except httpx.TransportError as exc:
+            except httpx.RequestError as exc:
                 failure = f"{type(exc).__name__}: {exc}"
+                cause = exc
             else:
-                if RATE_LIMIT_MARKER in str(response.url) or RATE_LIMIT_MARKER in response.text[:2000]:
+                if is_rate_limit_page(response):
                     raise RateLimitedError(f"999.md ограничил частоту запросов ({response.url})")
+                if response.status_code in FORBIDDEN_STATUSES:
+                    raise SourceUnavailableError(f"{path}: 999.md не пускает (HTTP {response.status_code})")
                 if not is_retryable_status(response.status_code):
                     return self._decode(response)
                 failure = f"HTTP {response.status_code}"
             if attempt >= self._max_retries:
-                raise SourceUnavailableError(f"{path}: {failure} после {attempt + 1} попыток")
+                raise SourceUnavailableError(f"{path}: {failure} после {attempt + 1} попыток") from cause
             wait = self._backoff[attempt]
             log.warning("%s: %s, повтор через %s с", path, failure, wait)
             self._sleep(wait)
@@ -72,6 +86,12 @@ class PoliteClient:
 
     def close(self) -> None:
         self._client.close()
+
+    def __enter__(self) -> "PoliteClient":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
 
     def _pause_between_requests(self) -> None:
         if self._requests_made:

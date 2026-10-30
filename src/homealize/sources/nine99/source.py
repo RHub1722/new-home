@@ -37,6 +37,9 @@ class Nine99Source:
             if received == 0:
                 if skip == 0:
                     raise EmptySearchError("SearchAds вернул 0 объявлений")
+                if 0 < page.total_count <= skip:  # объявлений стало меньше ровно на границе страницы
+                    log.info("999.md: объявлений стало %s — проход закончен на %s", page.total_count, skip)
+                    return
                 raise SourceSchemaError(f"999.md вернул пустую страницу с {skip} (найдено {page.total_count})")
             if page.total_count < skip + received:
                 raise SourceSchemaError(
@@ -57,6 +60,12 @@ class Nine99Source:
 
     def close(self) -> None:
         self._client.close()
+
+    def __enter__(self) -> "Nine99Source":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
 
 
 def build_nine99_source(settings: Settings, *, transport: httpx.BaseTransport | None = None) -> Nine99Source:

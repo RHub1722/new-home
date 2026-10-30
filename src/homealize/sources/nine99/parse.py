@@ -7,7 +7,7 @@ from typing import Any, Generic, TypeVar
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from homealize.models import AUTHOR_AGENCY, AUTHOR_DEVELOPER, AUTHOR_PRIVATE, AUTHOR_UNKNOWN, Listing
-from homealize.sources.base import Page, SourceSchemaError
+from homealize.sources.base import Page, SourceError, SourceSchemaError, SourceUnavailableError
 
 SOURCE_NAME = "999"
 AD_URL = "https://999.md/ru/{id}"
@@ -16,6 +16,13 @@ AUTHOR_TYPES = {18895: AUTHOR_PRIVATE, 18894: AUTHOR_AGENCY, 20364: AUTHOR_DEVEL
 PHONE_PLACEHOLDER = "[телефон удалён]"
 # Разделители в телефонах: пробел, дефис, U+2010, en dash, em dash, косая черта, скобки, точка.
 _PHONE_CANDIDATE = re.compile(r"[+(]?\d[\d\s\-\u2010\u2013\u2014/().]{6,}\d")
+# Ошибки GraphQL, которые означают, что наш запрос больше не подходит к схеме сайта.
+_SCHEMA_MESSAGE = re.compile(
+    r"cannot query field|unknown argument|unknown type|unknown field|syntax error|validation|"
+    r"of required type|is not defined|must have a selection|cannot be represented",
+    re.IGNORECASE,
+)
+_SCHEMA_CODES = {"GRAPHQL_VALIDATION_FAILED", "GRAPHQL_PARSE_FAILED", "BAD_USER_INPUT"}
 
 T = TypeVar("T")
 
@@ -94,7 +101,7 @@ class _Envelope(_Raw):
 def parse_search_response(payload: dict[str, Any]) -> Page:
     """Разбирает ответ SearchAds. Битое объявление попадает в parse_errors, а не валит страницу."""
     if payload.get("errors"):
-        raise SourceSchemaError(f"GraphQL вернул ошибки: {str(payload['errors'])[:500]}")
+        raise _graphql_error(payload["errors"])
     try:
         envelope = _Envelope.model_validate(payload)
     except ValidationError as exc:
@@ -121,6 +128,18 @@ def parse_search_response(payload: dict[str, Any]) -> Page:
         parse_errors=errors,
         unparsed_ids=unparsed_ids,
     )
+
+
+def _graphql_error(errors: Any) -> SourceError:
+    """Ошибки GraphQL: запрос больше не подходит к схеме сайта — или временный сбой сервера."""
+    text = str(errors)[:500]
+    for item in errors if isinstance(errors, list) else [errors]:
+        message = str(item.get("message", "")) if isinstance(item, dict) else str(item)
+        extensions = item.get("extensions") if isinstance(item, dict) else None
+        code = str(extensions.get("code", "")) if isinstance(extensions, dict) else ""
+        if code in _SCHEMA_CODES or _SCHEMA_MESSAGE.search(message):
+            return SourceSchemaError(f"GraphQL вернул ошибки: {text}")
+    return SourceUnavailableError(f"GraphQL вернул временную ошибку: {text}")
 
 
 def _location(error: Any) -> str:

@@ -98,3 +98,44 @@ def test_transient_status_is_retried_then_succeeds(status):
     client, requests, _ = make_client([httpx.Response(status), httpx.Response(200, json=OK)])
     assert client.post_json("/graphql", {}) == OK
     assert len(requests) == 2
+
+
+def test_marker_inside_json_is_not_a_rate_limit():
+    body = {"data": {"note": "999.md_request_limit"}}
+    client, _, _ = make_client([httpx.Response(200, json=body)])
+    assert client.post_json("/graphql", {}) == body
+
+
+def test_redirect_to_the_limit_page_is_a_rate_limit():
+    client, requests, _ = make_client(
+        [
+            httpx.Response(302, headers={"Location": "/999.md_request_limit.html"}),
+            httpx.Response(200, text="<html>лимит</html>"),
+        ]
+    )
+    with pytest.raises(RateLimitedError):
+        client.post_json("/graphql", {})
+    assert len(requests) == 2
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_forbidden_is_unavailable_not_schema_change(status):
+    client, requests, _ = make_client([httpx.Response(status, text="forbidden")])
+    with pytest.raises(SourceUnavailableError, match=str(status)):
+        client.post_json("/graphql", {})
+    assert len(requests) == 1
+
+
+def test_any_request_error_is_retried_and_kept_as_cause():
+    client, requests, _ = make_client([httpx.DecodingError("битый gzip")], max_retries=1, backoff=(1.0,))
+    with pytest.raises(SourceUnavailableError, match="DecodingError") as caught:
+        client.post_json("/graphql", {})
+    assert isinstance(caught.value.__cause__, httpx.DecodingError)
+    assert len(requests) == 2
+
+
+def test_client_is_a_context_manager():
+    client, _, _ = make_client([httpx.Response(200, json=OK)])
+    with client as same:
+        assert same is client
+    assert client._client.is_closed

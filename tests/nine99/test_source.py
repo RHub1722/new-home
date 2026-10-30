@@ -82,19 +82,22 @@ def test_empty_page_mid_scan_raises_and_keeps_earlier_pages():
     assert len(pages[0].listings) == 4
 
 
-def test_empty_page_after_count_shrank_also_raises():
+def test_empty_page_after_count_shrank_ends_the_scan():
     def handler(request):
         skip = json.loads(request.content)["variables"]["input"]["pagination"]["skip"]
         if skip == 0:
             return httpx.Response(200, json=load_fixture("search_page_1.json"))
         return httpx.Response(200, json={"data": {"searchAds": {"ads": [], "count": 3}}})
 
-    source = make_source(handler)
-    pages = []
-    with pytest.raises(SourceSchemaError):
-        for page in source.iter_pages():
-            pages.append(page)
+    pages = list(make_source(handler).iter_pages())
     assert len(pages) == 1
+
+
+def test_source_is_a_context_manager():
+    source = make_source(fixture_handler([]))
+    with source as same:
+        assert same is source
+    assert source._client._client.is_closed
 
 
 def test_empty_page_with_zero_count_mid_scan_raises():
