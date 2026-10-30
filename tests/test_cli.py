@@ -4,15 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from homealize import cli
+from homealize import cli, jobs
 from homealize.config import Settings
 from homealize.export.excel import ExportError
 from homealize.logging_setup import configure_logging, reset_logging
 from homealize.models import Poi
+from homealize.runlock import hold_lock
 from homealize.scoring.engine import ScoreSummary
 from homealize.storage import repo
 from homealize.storage.db import connect
-from tests.factories import FakeSource, make_listing, page
+from tests.factories import FakeSource, FakeTelegram, make_listing, page
 
 
 @pytest.fixture(autouse=True)
@@ -21,12 +22,19 @@ def _clean_logging():
     reset_logging()
 
 
-def write_config(tmp_path: Path) -> Path:
+def write_config(tmp_path: Path, *, env: str | None = None) -> Path:
+    """Настройки теста: все пути во временной папке, .env — только если передан env."""
+    data = tmp_path / "data"
+    if env is not None:
+        (tmp_path / ".env").write_text(env, encoding="utf-8")
     cfg = tmp_path / "settings.yaml"
     cfg.write_text(
-        f"storage:\n  db_path: '{(tmp_path / 'data' / 'test.db').as_posix()}'\n"
+        f"storage:\n  db_path: '{(data / 'test.db').as_posix()}'\n"
+        f"  run_lock_path: '{(data / 'run.lock').as_posix()}'\n"
+        f"  serve_lock_path: '{(data / 'serve.lock').as_posix()}'\n"
         f"logging:\n  path: '{(tmp_path / 'logs' / 'test.log').as_posix()}'\n"
-        f"export:\n  dir: '{(tmp_path / 'exports').as_posix()}'\n",
+        f"export:\n  dir: '{(tmp_path / 'exports').as_posix()}'\n"
+        f"telegram:\n  env_file: '{(tmp_path / '.env').as_posix()}'\n",
         encoding="utf-8",
     )
     return cfg
@@ -54,7 +62,7 @@ def _fake_evaluation(monkeypatch):
         calls.append(force_poi)
         return ScoreSummary(scored=2, eligible=1, best_total=71.5, warnings=["тестовое предупреждение"])
 
-    monkeypatch.setattr(cli, "evaluate", fake_evaluate)
+    monkeypatch.setattr(jobs, "evaluate", fake_evaluate)
     return calls
 
 
@@ -102,7 +110,7 @@ def test_run_returns_3_when_evaluation_fails(tmp_path, capsys, monkeypatch):
     def broken(*args, **kwargs):
         raise RuntimeError("сломалось")
 
-    monkeypatch.setattr(cli, "evaluate", broken)
+    monkeypatch.setattr(jobs, "evaluate", broken)
     assert cli.main(["--config", str(cfg), "run"]) == 3
     failure = "Оценка не выполнена: RuntimeError: сломалось"
     assert failure in capsys.readouterr().err
@@ -120,7 +128,7 @@ def test_failed_evaluation_does_not_commit_its_half_done_writes(tmp_path, monkey
         conn.execute("UPDATE listings SET title = 'недописано'")  # незавершённая запись оценки
         raise RuntimeError("сломалось")
 
-    monkeypatch.setattr(cli, "evaluate", half_done)
+    monkeypatch.setattr(jobs, "evaluate", half_done)
     assert cli.main(["--config", str(cfg), "run"]) == 3
     run, listing = last_run_and_listing(tmp_path)
     assert listing["title"] == make_listing().title
@@ -134,7 +142,7 @@ def test_run_returns_3_when_excel_fails_but_keeps_summary_and_warnings(tmp_path,
     def locked(conn, settings, *, now):
         raise ExportError("файл открыт в другой программе")
 
-    monkeypatch.setattr(cli, "export_workbook", locked)
+    monkeypatch.setattr(jobs, "export_workbook", locked)
     assert cli.main(["--config", str(cfg), "run"]) == 3
     captured = capsys.readouterr()
     assert "Оценка: оценено 2, в рейтинге 1, лучший балл 72." in captured.out
@@ -160,7 +168,7 @@ def test_run_warnings_are_appended_to_the_scan_errors(tmp_path, monkeypatch):
 def test_run_without_warnings_leaves_errors_empty(tmp_path, monkeypatch):
     cfg = write_config(tmp_path)
     monkeypatch.setattr(cli, "build_nine99_source", lambda settings: FakeSource([page(make_listing(id="a"))]))
-    monkeypatch.setattr(cli, "evaluate", lambda *args, **kwargs: ScoreSummary(scored=1, eligible=1, best_total=60.0))
+    monkeypatch.setattr(jobs, "evaluate", lambda *args, **kwargs: ScoreSummary(scored=1, eligible=1, best_total=60.0))
     assert cli.main(["--config", str(cfg), "run"]) == 0
     assert run_errors(tmp_path) == []
 
@@ -191,7 +199,7 @@ def test_rescore_returns_3_when_evaluation_fails(tmp_path, capsys, monkeypatch):
     def broken(*args, **kwargs):
         raise RuntimeError("сломалось")
 
-    monkeypatch.setattr(cli, "evaluate", broken)
+    monkeypatch.setattr(jobs, "evaluate", broken)
     assert cli.main(["--config", str(cfg), "rescore"]) == 3
     assert "Оценка не выполнена: RuntimeError: сломалось" in capsys.readouterr().err
     conn = connect(tmp_path / "data" / "test.db")
@@ -263,3 +271,119 @@ def test_configure_logging_silences_httpx_request_lines(tmp_path):
     assert logging.getLogger("httpx").level == logging.WARNING
     reset_logging()
     assert logging.getLogger("httpx").level == logging.NOTSET
+
+
+TELEGRAM_ENV = "TELEGRAM_BOT_TOKEN=t\nTELEGRAM_CHAT_ID=42\n"
+
+
+def one_listing(monkeypatch):
+    monkeypatch.setattr(cli, "build_nine99_source", lambda settings: FakeSource([page(make_listing(id="a"))]))
+
+
+def test_run_without_telegram_says_so(tmp_path, capsys, monkeypatch):
+    cfg = write_config(tmp_path)
+    one_listing(monkeypatch)
+    assert cli.main(["--config", str(cfg), "run"]) == 0
+    assert "Telegram не настроен" in capsys.readouterr().out
+
+
+def test_run_dry_run_prints_planned_messages(tmp_path, capsys, monkeypatch):
+    cfg = write_config(tmp_path, env=TELEGRAM_ENV)
+    one_listing(monkeypatch)
+
+    def no_client(settings, token):
+        raise AssertionError("--dry-run не должен обращаться к Telegram")
+
+    monkeypatch.setattr(cli, "_telegram_client", no_client)
+    assert cli.main(["--config", str(cfg), "run", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "--dry-run: уведомлений к отправке 1" in out
+    assert "Первый прогон: загружено 1 участок" in out
+    assert "<b>" not in out
+
+
+def test_run_sends_notifications_when_telegram_is_configured(tmp_path, capsys, monkeypatch):
+    cfg = write_config(tmp_path, env=TELEGRAM_ENV)
+    fake = FakeTelegram()
+    monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: fake)
+    one_listing(monkeypatch)
+    assert cli.main(["--config", str(cfg), "run"]) == 0
+    assert "Telegram: отправлено 1" in capsys.readouterr().out
+    assert "Первый прогон" in fake.texts()[0]
+    assert fake.closed
+
+
+def test_run_is_refused_while_another_run_holds_the_lock(tmp_path, capsys):
+    cfg = write_config(tmp_path)
+    with hold_lock(tmp_path / "data" / "run.lock"):
+        assert cli.main(["--config", str(cfg), "run"]) == 4
+    assert "Другой прогон ещё идёт" in capsys.readouterr().err
+
+
+def test_rescore_is_refused_while_a_run_holds_the_lock(tmp_path):
+    cfg = write_config(tmp_path)
+    with hold_lock(tmp_path / "data" / "run.lock"):
+        assert cli.main(["--config", str(cfg), "rescore"]) == 4
+
+
+def test_broken_settlements_file_is_a_settings_error(tmp_path, capsys):
+    cfg = write_config(tmp_path)
+    bad = tmp_path / "settlements.yaml"
+    bad.write_text("- {id: 1}\n", encoding="utf-8")
+    cfg.write_text(
+        cfg.read_text(encoding="utf-8") + f"scoring:\n  settlements_path: '{bad.as_posix()}'\n", encoding="utf-8"
+    )
+    assert cli.main(["--config", str(cfg), "run"]) == 2
+    assert "справочник сёл" in capsys.readouterr().err
+
+
+def test_bad_env_file_is_a_settings_error(tmp_path):
+    cfg = write_config(tmp_path, env="TELEGRAM_BOT_TOKEN=t\nTELEGRAM_CHAT_ID=abc\n")
+    assert cli.main(["--config", str(cfg), "run"]) == 2
+
+
+def test_digest_dry_run_prints_the_digest(tmp_path, capsys):
+    cfg = write_config(tmp_path)
+    assert cli.main(["--config", str(cfg), "digest", "--dry-run"]) == 0
+    assert "Дайджест за" in capsys.readouterr().out
+
+
+def test_digest_needs_telegram(tmp_path, capsys):
+    cfg = write_config(tmp_path)
+    assert cli.main(["--config", str(cfg), "digest"]) == 2
+    assert "Telegram не настроен" in capsys.readouterr().err
+
+
+def test_digest_is_sent_once_a_day(tmp_path, capsys, monkeypatch):
+    cfg = write_config(tmp_path, env=TELEGRAM_ENV)
+    fake = FakeTelegram()
+    monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: fake)
+    assert cli.main(["--config", str(cfg), "digest"]) == 0
+    assert cli.main(["--config", str(cfg), "digest"]) == 0
+    assert "уже отправлялся" in capsys.readouterr().out
+    assert len(fake.sent) == 1
+
+
+def test_telegram_test_without_a_token(tmp_path, capsys):
+    cfg = write_config(tmp_path)
+    assert cli.main(["--config", str(cfg), "telegram-test"]) == 2
+    assert "@BotFather" in capsys.readouterr().err
+
+
+def test_telegram_test_lists_chats_when_chat_id_is_missing(tmp_path, capsys, monkeypatch):
+    cfg = write_config(tmp_path, env="TELEGRAM_BOT_TOKEN=t\n")
+    update = {"update_id": 1, "message": {"chat": {"id": 555, "first_name": "Тест"}, "text": "привет"}}
+    fake = FakeTelegram(updates=[[update]])
+    monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: fake)
+    assert cli.main(["--config", str(cfg), "telegram-test"]) == 2
+    out = capsys.readouterr().out
+    assert "555 Тест" in out and "TELEGRAM_CHAT_ID" in out
+
+
+def test_telegram_test_sends_a_message(tmp_path, capsys, monkeypatch):
+    cfg = write_config(tmp_path, env=TELEGRAM_ENV)
+    fake = FakeTelegram()
+    monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: fake)
+    assert cli.main(["--config", str(cfg), "telegram-test"]) == 0
+    assert fake.sent == [(42, "✅ Homealize на связи. Команды: /help", None)]
+    assert "@homealize_test_bot" in capsys.readouterr().out
