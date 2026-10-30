@@ -1,12 +1,13 @@
 import json
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import httpx
 import pytest
 
 from homealize.config import Settings
 from homealize.pipeline import run_once
+from homealize.sources.base import EmptySearchError, RateLimitedError, SourceSchemaError, SourceUnavailableError
 from homealize.sources.nine99.source import build_nine99_source
 from homealize.storage import repo
 from tests.factories import FakeSource, load_fixture, make_listing, page
@@ -240,3 +241,58 @@ def test_seen_share_counts_unparsable_ads_as_seen(db):
     assert summary.search_complete is True
     assert repo.get_listing(db, "e")["missed_scans"] == 0
     assert repo.get_listing(db, "f")["missed_scans"] == 1
+
+
+def test_finished_at_comes_from_the_clock(db):
+    run_once(db, FakeSource([page(make_listing(id="a"))]), SETTINGS, now=T0, clock=lambda: at(1))
+    run = repo.last_run(db)
+    assert (run["started_at"], run["finished_at"]) == (T0.isoformat(), at(1).isoformat())
+
+
+def test_now_is_stored_in_utc(db):
+    local = T0.astimezone(timezone(timedelta(hours=2)))
+    run_once(db, FakeSource([page(make_listing(id="a"))]), SETTINGS, now=local, clock=lambda: local)
+    assert repo.get_listing(db, "a")["first_seen_at"] == T0.isoformat()
+    run = repo.last_run(db)
+    assert (run["started_at"], run["finished_at"]) == (T0.isoformat(), T0.isoformat())
+
+
+@pytest.mark.parametrize(
+    ("error", "kind"),
+    [
+        (RateLimitedError("лимит"), "rate_limited"),
+        (EmptySearchError("0 объявлений"), "empty_search"),
+        (SourceSchemaError("схема"), "source_schema"),
+        (SourceUnavailableError("сеть"), "source_unavailable"),
+    ],
+)
+def test_interrupted_scan_reports_failure_kind(db, error, kind):
+    summary = run_once(db, FakeSource([], fail_at=0, error=error), SETTINGS, now=T0)
+    assert summary.failure == kind
+    assert summary.failure_detail == f"{type(error).__name__}: {error}"
+
+
+def test_complete_scan_has_no_failure(db):
+    summary = run_once(db, FakeSource([page(make_listing(id="a"))]), SETTINGS, now=T0)
+    assert (summary.failure, summary.failure_detail) == (None, "")
+
+
+def test_too_many_unparsed_is_failure_unparsed(db):
+    source = FakeSource([page(make_listing(id="a"), errors=("e1", "e2"), unparsed=("x", "y"))])
+    summary = run_once(db, source, SETTINGS, now=T0)
+    assert summary.failure == "unparsed"
+    assert "нераспознанных" in summary.failure_detail
+
+
+def test_seeing_too_few_known_listings_is_failure_too_few_seen(db):
+    run_once(db, FakeSource([page(*[make_listing(id=str(i)) for i in range(4)])]), SETTINGS, now=T0)
+    summary = run_once(db, FakeSource([page(make_listing(id="0"))]), SETTINGS, now=at(3))
+    assert summary.failure == "too_few_seen"
+
+
+def test_crash_is_recorded_as_failed_and_reraised(db):
+    with pytest.raises(RuntimeError):
+        run_once(db, FakeSource([], fail_at=0, error=RuntimeError("сломалось")), SETTINGS, now=T0)
+    run = repo.last_run(db)
+    assert run["status"] == "failed"
+    assert json.loads(run["errors"]) == ["RuntimeError: сломалось"]

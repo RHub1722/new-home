@@ -170,3 +170,24 @@ def test_add_run_errors_without_messages_changes_nothing(db):
 def test_add_run_errors_for_unknown_run_is_an_error(db):
     with pytest.raises(ValueError, match="42"):
         repo.add_run_errors(db, 42, ["x"])
+
+
+def test_close_stale_runs_marks_running_as_failed(db):
+    stale = repo.start_run(db, T0)
+    done = repo.start_run(db, T0)
+    repo.finish_run(db, done, RunSummary(search_complete=True), now=T1)
+    assert repo.close_stale_runs(db) == 1
+    row = db.execute("SELECT * FROM runs WHERE id = ?", (stale,)).fetchone()
+    assert row["status"] == "failed"
+    assert row["finished_at"] is None
+    assert json.loads(row["errors"]) == [repo.STALE_RUN_MESSAGE]
+    assert db.execute("SELECT status FROM runs WHERE id = ?", (done,)).fetchone()[0] == "ok"
+    assert repo.close_stale_runs(db) == 0
+
+
+def test_mark_unseen_counts_only_active_listings(db):
+    save(db, make_listing(id="a"))
+    save(db, make_listing(id="f"), status="filtered_out", reason="region")
+    assert repo.mark_unseen(db, set(), threshold=1) == 1
+    assert repo.get_listing(db, "a")["status"] == "removed"
+    assert repo.get_listing(db, "f")["status"] == "removed"

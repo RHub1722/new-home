@@ -67,6 +67,8 @@ class RunSummary:
     price_changed: int = 0
     removed: int = 0
     errors: list[str] = field(default_factory=list)
+    failure: str | None = None  # вид сбоя для тех. тревоги (notify/alerts.py); None — обход прошёл
+    failure_detail: str = ""  # текст первой причины сбоя
 
     @property
     def status(self) -> str:

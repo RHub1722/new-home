@@ -2,12 +2,19 @@
 
 import logging
 import sqlite3
-from datetime import datetime
+from collections.abc import Callable
+from datetime import UTC, datetime
 
 from homealize.config import Settings
 from homealize.filters import filter_reason
 from homealize.models import RunSummary
-from homealize.sources.base import Source, SourceError
+from homealize.sources.base import (
+    EmptySearchError,
+    RateLimitedError,
+    Source,
+    SourceError,
+    SourceSchemaError,
+)
 from homealize.storage import repo
 from homealize.storage.repo import UpsertOutcome
 
@@ -17,7 +24,17 @@ MAX_UNPARSED_SHARE = 0.2  # больше этой доли нераспозна�
 MIN_SEEN_SHARE = 0.5  # обход, увидевший меньше этой доли известных объявлений, ничего не снимает
 
 
-def run_once(conn: sqlite3.Connection, source: Source, settings: Settings, *, now: datetime) -> RunSummary:
+def run_once(
+    conn: sqlite3.Connection,
+    source: Source,
+    settings: Settings,
+    *,
+    now: datetime,
+    clock: Callable[[], datetime] | None = None,
+) -> RunSummary:
+    """now — начало прогона (оно же «впервые увидено»); clock() даёт время окончания."""
+    now = now.astimezone(UTC)
+    clock = clock or (lambda: datetime.now(UTC))
     summary = RunSummary()
     run_id = repo.start_run(conn, now)
     conn.commit()
@@ -46,9 +63,10 @@ def run_once(conn: sqlite3.Connection, source: Source, settings: Settings, *, no
             conn.commit()
         problems = _removal_problems(conn, seen | unparsed_ids, unparsed=unparsed, received=received)
         if problems:
-            for message in problems:
+            for _kind, message in problems:
                 log.error(message)
-            summary.errors.extend(problems)
+                summary.errors.append(message)
+            summary.failure, summary.failure_detail = problems[0]
         else:
             summary.removed = repo.mark_unseen(
                 conn, seen | unparsed_ids, threshold=settings.lifecycle.removal_missed_scans
@@ -57,15 +75,19 @@ def run_once(conn: sqlite3.Connection, source: Source, settings: Settings, *, no
     except SourceError as exc:
         conn.rollback()
         log.error("Обход %s прерван: %s", source.name, exc)
-        summary.errors.append(f"{type(exc).__name__}: {exc}")
+        message = f"{type(exc).__name__}: {exc}"
+        summary.errors.append(message)
+        summary.failure, summary.failure_detail = failure_kind(exc), message
     except Exception as exc:
         conn.rollback()
         log.exception("Прогон %s упал", run_id)
-        summary.errors.append(f"{type(exc).__name__}: {exc}")
-        _finish(conn, run_id, summary, seen, now)
+        message = f"{type(exc).__name__}: {exc}"
+        summary.errors.append(message)
+        summary.failure, summary.failure_detail = "crashed", message
+        _finish(conn, run_id, summary, seen, clock())
         raise
 
-    _finish(conn, run_id, summary, seen, now)
+    _finish(conn, run_id, summary, seen, clock())
     log.info(
         "Прогон %s завершён (%s): увидено %s, новых %s, цена изменилась %s, обновлено %s, снято %s, ошибок %s",
         run_id, summary.status, summary.ads_seen, summary.new, summary.price_changed,
@@ -74,16 +96,31 @@ def run_once(conn: sqlite3.Connection, source: Source, settings: Settings, *, no
     return summary
 
 
+def failure_kind(exc: SourceError) -> str:
+    """Вид сбоя обхода для технической тревоги."""
+    if isinstance(exc, RateLimitedError):
+        return "rate_limited"
+    if isinstance(exc, EmptySearchError):
+        return "empty_search"
+    if isinstance(exc, SourceSchemaError):
+        return "source_schema"
+    return "source_unavailable"
+
+
 def _removal_problems(
     conn: sqlite3.Connection, visible: set[str], *, unparsed: int, received: int
-) -> list[str]:
-    """Причины, по которым обходу нельзя доверять и снимать пропавшие объявления нельзя."""
+) -> list[tuple[str, str]]:
+    """(вид, текст) причин, по которым обходу нельзя доверять и снимать пропавшие объявления нельзя."""
     problems = []
     if received > 0 and unparsed / received > MAX_UNPARSED_SHARE:
-        problems.append(f"Слишком много нераспознанных объявлений: {unparsed} из {received} — снятие пропущено")
+        problems.append(
+            ("unparsed", f"Слишком много нераспознанных объявлений: {unparsed} из {received} — снятие пропущено")
+        )
     known = repo.count_not_removed(conn)
     if known > 0 and len(visible) < MIN_SEEN_SHARE * known:
-        problems.append(f"Обход увидел {len(visible)} объявлений при {known} известных — снятие пропущено")
+        problems.append(
+            ("too_few_seen", f"Обход увидел {len(visible)} объявлений при {known} известных — снятие пропущено")
+        )
     return problems
 
 
@@ -96,7 +133,9 @@ def _count(summary: RunSummary, outcome: UpsertOutcome) -> None:
         summary.changed += 1
 
 
-def _finish(conn: sqlite3.Connection, run_id: int, summary: RunSummary, seen: set[str], now: datetime) -> None:
+def _finish(
+    conn: sqlite3.Connection, run_id: int, summary: RunSummary, seen: set[str], finished: datetime
+) -> None:
     summary.ads_seen = len(seen)
-    repo.finish_run(conn, run_id, summary, now=now)
+    repo.finish_run(conn, run_id, summary, now=finished.astimezone(UTC))
     conn.commit()

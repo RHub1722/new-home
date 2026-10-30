@@ -18,6 +18,9 @@ class UpsertOutcome(StrEnum):
     UNCHANGED = "unchanged"
 
 
+STALE_RUN_MESSAGE = "Прогон прерван: процесс остановился раньше, чем записал итоги"
+
+
 def upsert_listing(
     conn: sqlite3.Connection,
     listing: Listing,
@@ -60,8 +63,11 @@ def upsert_listing(
 
 
 def mark_unseen(conn: sqlite3.Connection, seen_ids: set[str], *, threshold: int) -> int:
-    """После полного прохода: +1 пропуск всем, кого не видели; снимает тех, кто пропущен threshold раз."""
-    rows = conn.execute("SELECT id, missed_scans FROM listings WHERE status != 'removed'").fetchall()
+    """После полного прохода: +1 пропуск всем, кого не видели; снимает тех, кто пропущен threshold раз.
+
+    Возвращает, сколько снято активных объявлений (бывшие filtered_out тоже снимаются, но не считаются).
+    """
+    rows = conn.execute("SELECT id, missed_scans, status FROM listings WHERE status != 'removed'").fetchall()
     removed = 0
     for row in rows:
         if row["id"] in seen_ids:
@@ -69,7 +75,7 @@ def mark_unseen(conn: sqlite3.Connection, seen_ids: set[str], *, threshold: int)
         missed = row["missed_scans"] + 1
         if missed >= threshold:
             conn.execute("UPDATE listings SET missed_scans = ?, status = 'removed' WHERE id = ?", (missed, row["id"]))
-            removed += 1
+            removed += row["status"] == "active"
         else:
             conn.execute("UPDATE listings SET missed_scans = ? WHERE id = ?", (missed, row["id"]))
     return removed
@@ -113,6 +119,18 @@ def add_run_errors(conn: sqlite3.Connection, run_id: int, messages: list[str]) -
         raise ValueError(f"Прогон {run_id} не найден")
     errors = [*json.loads(row["errors"]), *messages]
     conn.execute("UPDATE runs SET errors = ? WHERE id = ?", (json.dumps(errors, ensure_ascii=False), run_id))
+
+
+def close_stale_runs(conn: sqlite3.Connection) -> int:
+    """Прогоны, оставшиеся в статусе running (Ctrl+C, сбой записи итогов), помечаются failed.
+
+    Вызывать только под блокировкой прогона (homealize.runlock): тогда ни один из них уже не идёт.
+    """
+    rows = conn.execute("SELECT id FROM runs WHERE status = 'running'").fetchall()
+    for row in rows:
+        conn.execute("UPDATE runs SET status = 'failed' WHERE id = ?", (row["id"],))
+        add_run_errors(conn, row["id"], [STALE_RUN_MESSAGE])
+    return len(rows)
 
 
 def get_listing(conn: sqlite3.Connection, listing_id: str) -> sqlite3.Row | None:
