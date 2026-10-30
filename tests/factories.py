@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from homealize.models import Listing
+from homealize.runlock import LockBusyError, hold_lock
 from homealize.sources.base import Page, SourceUnavailableError
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -157,3 +158,20 @@ class FakeTelegram:
 
     def texts(self) -> list[str]:
         return [text for _chat, text, _preview in self.sent]
+
+
+class LockProbeTelegram(FakeTelegram):
+    """FakeTelegram, который при каждой отправке проверяет, держит ли кто-то блокировку прогона."""
+
+    def __init__(self, lock_path, **kwargs):
+        super().__init__(**kwargs)
+        self.lock_path = lock_path
+        self.lock_held: list[bool] = []
+
+    def send_message(self, chat_id, text, *, preview_url=None):
+        try:
+            with hold_lock(self.lock_path):
+                self.lock_held.append(False)
+        except LockBusyError:
+            self.lock_held.append(True)
+        super().send_message(chat_id, text, preview_url=preview_url)

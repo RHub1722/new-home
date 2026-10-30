@@ -367,6 +367,67 @@ def test_digest_is_sent_once_a_day(tmp_path, capsys, monkeypatch):
     assert len(fake.sent) == 1
 
 
+def stored_notifications(tmp_path: Path) -> list[tuple[str, str]]:
+    conn = connect(tmp_path / "data" / "test.db")
+    try:
+        return [(row["kind"], row["status"]) for row in conn.execute("SELECT kind, status FROM notifications")]
+    finally:
+        conn.close()
+
+
+def test_digest_during_a_run_is_queued_exits_4_and_goes_out_later(tmp_path, capsys, monkeypatch):
+    cfg = write_config(tmp_path, env=TELEGRAM_ENV)
+    fake = FakeTelegram()
+    monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: fake)
+    with hold_lock(tmp_path / "data" / "run.lock"):
+        assert cli.main(["--config", str(cfg), "digest"]) == 4
+    captured = capsys.readouterr()
+    assert "Идёт другой прогон — дайджест поставлен в очередь и уйдёт со следующей отправкой." in captured.err
+    assert "Telegram: отправлено" not in captured.out
+    assert fake.sent == [] and fake.closed
+    assert stored_notifications(tmp_path) == [("digest", "pending")]
+    assert cli.main(["--config", str(cfg), "digest"]) == 0  # прогон закончился: дайджест уходит
+    out = capsys.readouterr().out
+    assert "ждёт отправки" in out and "Telegram: отправлено 1" in out
+    assert len(fake.sent) == 1 and "Дайджест за" in fake.texts()[0]
+    assert stored_notifications(tmp_path) == [("digest", "sent")]
+
+
+def test_digest_already_sent_is_reported_even_while_a_run_holds_the_lock(tmp_path, capsys, monkeypatch):
+    cfg = write_config(tmp_path, env=TELEGRAM_ENV)
+    fake = FakeTelegram()
+    monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: fake)
+    assert cli.main(["--config", str(cfg), "digest"]) == 0
+    capsys.readouterr()
+    with hold_lock(tmp_path / "data" / "run.lock"):
+        assert cli.main(["--config", str(cfg), "digest"]) == 0
+    captured = capsys.readouterr()
+    assert "уже отправлялся" in captured.out and "Идёт другой прогон" not in captured.err
+    assert len(fake.sent) == 1
+
+
+def test_digest_dropped_earlier_is_still_reported_as_failed_while_a_run_holds_the_lock(tmp_path, capsys, monkeypatch):
+    cfg = write_config(tmp_path, env=TELEGRAM_ENV)
+    fake = FakeTelegram(errors=[TelegramError("Bad Request", permanent=True)])
+    monkeypatch.setattr(cli, "_telegram_client", lambda settings, token: fake)
+    assert cli.main(["--config", str(cfg), "digest"]) == 3
+    capsys.readouterr()
+    with hold_lock(tmp_path / "data" / "run.lock"):
+        assert cli.main(["--config", str(cfg), "digest"]) == 3
+    captured = capsys.readouterr()
+    assert "отправить не удалось" in captured.err and "Идёт другой прогон" not in captured.err
+    assert fake.sent == []
+
+
+def test_digest_dry_run_ignores_the_run_lock_and_queues_nothing(tmp_path, capsys):
+    cfg = write_config(tmp_path)
+    with hold_lock(tmp_path / "data" / "run.lock"):
+        assert cli.main(["--config", str(cfg), "digest", "--dry-run"]) == 0
+    captured = capsys.readouterr()
+    assert "Дайджест за" in captured.out and "Идёт другой прогон" not in captured.err
+    assert stored_notifications(tmp_path) == []
+
+
 def test_run_returns_3_when_telegram_delivery_fails(tmp_path, capsys, monkeypatch):
     cfg = write_config(tmp_path, env=TELEGRAM_ENV)
     fake = FakeTelegram(errors=[TelegramError("нет сети")])

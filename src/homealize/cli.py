@@ -37,6 +37,7 @@ EVALUATION_FAILED = 3  # оценка, Excel, обновление данных 
 BUSY = 4
 SERVE_CRASHED = 1  # serve остановился из-за неожиданной ошибки
 BUSY_MESSAGE = "Другой прогон ещё идёт (например, по расписанию serve) — попробуйте через пару минут."
+DIGEST_QUEUED_MESSAGE = "Идёт другой прогон — дайджест поставлен в очередь и уйдёт со следующей отправкой."
 NO_TELEGRAM = (
     "Telegram не настроен: нужны TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID в .env "
     "(см. README, раздел «Telegram», и `uv run homealize telegram-test`)."
@@ -259,15 +260,20 @@ def _digest(settings: Settings, *, dry_run: bool) -> int:
     if before == "sent":
         print("Дайджест за сегодня уже отправлялся.")
         return 0
+    if delivery is None and after != "dropped":  # Telegram настроен, не dry-run: блокировка прогона занята
+        print(DIGEST_QUEUED_MESSAGE, file=sys.stderr)
+        return BUSY
     if before == "pending":
         print("Дайджест за сегодня ждёт отправки.")
-    _print_delivery(delivery)
+    if delivery is not None:
+        _print_delivery(delivery)
     if after == "dropped":
         print(
             f"Дайджест за сегодня отправить не удалось — подробности в {settings.logging.path.as_posix()}.",
             file=sys.stderr,
         )
-    return EVALUATION_FAILED if delivery.failed or delivery.dropped or after == "dropped" else 0
+    failed = delivery is not None and (delivery.failed or delivery.dropped)
+    return EVALUATION_FAILED if failed or after == "dropped" else 0
 
 
 def _telegram_test(settings: Settings) -> int:

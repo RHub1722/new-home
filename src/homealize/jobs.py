@@ -22,7 +22,7 @@ from homealize.notify.digest import plan_digest
 from homealize.notify.events import plan_after_run
 from homealize.notify.outbox import Delivery, Notifier, Outgoing, deliver, enqueue
 from homealize.pipeline import run_once
-from homealize.runlock import hold_lock
+from homealize.runlock import LockBusyError, hold_lock
 from homealize.scoring.engine import ScoreSummary
 from homealize.sources.base import Source
 from homealize.storage import repo
@@ -133,13 +133,22 @@ def send_digest(
     dry_run: bool = False,
     sleep: Callable[[float], None] = time.sleep,
 ) -> tuple[Outgoing, bool, Delivery | None]:
-    """Дайджест дня: сообщение, поставлено ли оно в очередь (False — за сегодня уже был) и итог отправки."""
+    """Дайджест дня: сообщение, поставлено ли оно в очередь (False — за сегодня уже был) и итог отправки.
+
+    Итог None — ничего не отправлялось: --dry-run, нет Telegram или идёт другой прогон (блокировка занята).
+    В последнем случае дайджест уже стоит в очереди и уйдёт со следующей отправкой.
+    """
     item = plan_digest(conn, settings, now=now)
     if dry_run or notifier is None:
         return item, False, None
     added = enqueue(conn, [item], now=now) > 0
-    conn.commit()
-    return item, added, deliver(conn, notifier, settings.telegram, now=now, sleep=sleep)
+    conn.commit()  # дайджест дня не теряется, даже если отправить его сейчас нельзя
+    try:
+        with hold_lock(settings.storage.run_lock_path):  # очередь отправляет один процесс за раз
+            delivery = deliver(conn, notifier, settings.telegram, now=now, sleep=sleep)
+    except LockBusyError:
+        return item, added, None
+    return item, added, delivery
 
 
 def _scan(

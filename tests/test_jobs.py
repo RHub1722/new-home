@@ -6,11 +6,12 @@ import pytest
 
 from homealize import jobs
 from homealize.config import Settings
+from homealize.notify import outbox
 from homealize.notify.outbox import Notifier
 from homealize.runlock import LockBusyError, hold_lock
 from homealize.sources.base import RateLimitedError
 from homealize.storage import repo
-from tests.factories import FakeSource, FakeTelegram, make_listing, page
+from tests.factories import FakeSource, FakeTelegram, LockProbeTelegram, make_listing, page
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 T0 = datetime(2026, 10, 30, 5, 0, tzinfo=UTC)
@@ -159,6 +160,45 @@ def test_crash_before_the_scan_alerts(db, settings):
     )
     assert (result.scan, result.run_id, result.crash) == (None, None, "RuntimeError: нет сети")
     assert telegram.texts()[0].startswith("🛠 <b>Тех. тревога</b>: прогон упал")
+
+
+def digest(db, settings, telegram, **kwargs):
+    return jobs.send_digest(
+        db, settings, Notifier(telegram, 42), now=T0, sleep=lambda _seconds: None, **kwargs
+    )
+
+
+def test_digest_is_queued_but_not_sent_while_a_run_holds_the_lock(db, settings):
+    telegram = FakeTelegram()
+    with hold_lock(settings.storage.run_lock_path):
+        item, added, delivery = digest(db, settings, telegram)
+    assert (added, delivery) == (True, None)  # дайджест дня не потерян, но отправит его следующая отправка
+    assert telegram.sent == []
+    assert outbox.status(db, item.key) == "pending"
+
+    _item, added, delivery = digest(db, settings, telegram)  # прогон закончился
+    assert (added, delivery.sent) == (False, 1)
+    assert len(telegram.sent) == 1 and "Дайджест за 30.10" in telegram.texts()[0]
+    assert outbox.status(db, item.key) == "sent"
+
+    _item, _added, delivery = digest(db, settings, telegram)
+    assert delivery.sent == 0 and len(telegram.sent) == 1  # второй раз то же не уходит
+
+
+def test_digest_is_delivered_under_the_run_lock(db, settings):
+    telegram = LockProbeTelegram(settings.storage.run_lock_path)
+    _item, _added, delivery = digest(db, settings, telegram)
+    assert delivery.sent == 1 and telegram.lock_held == [True]
+    with hold_lock(settings.storage.run_lock_path):  # после отправки блокировка свободна
+        pass
+
+
+def test_digest_dry_run_does_not_touch_the_lock_or_the_queue(db, settings):
+    telegram = FakeTelegram()
+    with hold_lock(settings.storage.run_lock_path):
+        item, added, delivery = digest(db, settings, telegram, dry_run=True)
+    assert (added, delivery) == (False, None) and "Дайджест за" in item.text
+    assert outbox.status(db, item.key) is None
 
 
 def test_failed_first_scan_does_not_use_up_the_first_run_summary(db, settings):

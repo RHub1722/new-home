@@ -69,7 +69,11 @@ def deliver(
     now: datetime,
     sleep: Callable[[float], None] = time.sleep,
 ) -> Delivery:
-    """Отправляет ожидающие сообщения по порядку. При временном сбое останавливается: остальные уйдут позже."""
+    """Отправляет ожидающие сообщения по порядку. При временном сбое останавливается: остальные уйдут позже.
+
+    Вызывать только под блокировкой прогона (runlock.hold_lock): два процесса, читающие одну очередь
+    одновременно, отправили бы одно и то же сообщение дважды.
+    """
     delivery = Delivery()
     stamp = now.astimezone(UTC).isoformat()
     expire_before = (now.astimezone(UTC) - timedelta(hours=settings.expire_hours)).isoformat()

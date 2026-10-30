@@ -19,7 +19,7 @@ from homealize.notify.digest import digest_key
 from homealize.notify.format import short
 from homealize.notify.outbox import Notifier, deliver
 from homealize.notify.telegram import TelegramError
-from homealize.runlock import LockBusyError
+from homealize.runlock import LockBusyError, hold_lock
 from homealize.scheduler import Schedule
 from homealize.storage import repo
 
@@ -104,7 +104,9 @@ class Service:
 
     def _do_digest(self, now: datetime) -> None:
         try:
-            send_digest(self._conn, self._settings, self._notifier, now=now, sleep=self._sleep)
+            *_, delivery = send_digest(self._conn, self._settings, self._notifier, now=now, sleep=self._sleep)
+            if delivery is None:  # не ошибка: дайджест в очереди, его отправит идущий прогон или досылка очереди
+                log.info("Дайджест поставлен в очередь, отправка отложена: идёт другой прогон")
         except Exception:
             self._rollback()
             log.exception("Дайджест не отправлен")
@@ -116,7 +118,10 @@ class Service:
         if not outbox.pending_count(self._conn):
             return
         try:
-            deliver(self._conn, self._notifier, self._settings.telegram, now=now, sleep=self._sleep)
+            with hold_lock(self._settings.storage.run_lock_path):  # очередь отправляет один процесс за раз
+                deliver(self._conn, self._notifier, self._settings.telegram, now=now, sleep=self._sleep)
+        except LockBusyError:
+            log.info("Очередь уведомлений не отправлена: идёт другой прогон, он отправит её сам")
         except Exception:
             self._rollback()
             log.exception("Очередь уведомлений не отправлена")
