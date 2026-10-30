@@ -126,6 +126,8 @@ def _content(listing: Listing) -> dict[str, object]:
         "title": listing.title,
         "region": listing.region,
         "settlement": listing.settlement,
+        "region_id": listing.region_id,
+        "settlement_id": listing.settlement_id,
         "zone": listing.zone,
         "street": listing.street,
         "lat": listing.lat,

@@ -143,6 +143,8 @@ def to_listing(raw: RawAd) -> Listing:
         author_type=AUTHOR_TYPES.get(author.value, AUTHOR_UNKNOWN) if author else AUTHOR_UNKNOWN,
         region=_option(raw.region),
         settlement=_option(raw.city),
+        region_id=_option_id(raw.region),
+        settlement_id=_option_id(raw.city),
         zone=_option(raw.district),
         street=_scrub(_clean_text(_value(raw.street))),
         lat=point.lat if has_point else None,
@@ -184,6 +186,12 @@ def _value(feature):
 def _option(feature: Feature[OptionValue] | None) -> str | None:
     option = _value(feature)
     return option.translated if option else None
+
+
+def _option_id(feature: Feature[OptionValue] | None) -> int | None:
+    option = _value(feature)
+    value = option.value if option else None
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _clean_text(value: str | None) -> str | None:

@@ -24,6 +24,8 @@ class Listing:
     author_type: str = AUTHOR_UNKNOWN
     region: str | None = None
     settlement: str | None = None
+    region_id: int | None = None  # номер опции «Регион» на сайте
+    settlement_id: int | None = None  # номер опции «Населённый пункт» на сайте
     zone: str | None = None
     street: str | None = None
     lat: float | None = None

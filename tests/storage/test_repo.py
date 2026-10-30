@@ -105,6 +105,12 @@ def test_removed_listing_returns_to_active_when_seen_again(db):
     assert (row["status"], row["missed_scans"]) == ("active", 0)
 
 
+def test_region_and_settlement_ids_are_saved(db):
+    save(db, make_listing(region_id=12900, settlement_id=14010))
+    row = repo.get_listing(db, "100000001")
+    assert (row["region_id"], row["settlement_id"]) == (12900, 14010)
+
+
 def test_count_not_removed_counts_active_and_filtered_out_only(db):
     assert repo.count_not_removed(db) == 0
     save(db, make_listing(id="a"))

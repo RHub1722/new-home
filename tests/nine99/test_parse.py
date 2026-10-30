@@ -106,6 +106,20 @@ def test_option_sub_field_drift_does_not_make_ad_unparsable():
     assert page.listings[0].region == "Кишинёв мун."
 
 
+def test_option_ids_are_kept():
+    ads = by_id("search_page_1.json")
+    assert (ads["100000001"].region_id, ads["100000001"].settlement_id) == (12900, 14010)
+    assert (ads["100000002"].region_id, ads["100000002"].settlement_id) == (12920, 13700)
+
+
+def test_non_numeric_option_id_gives_none():
+    payload = load_fixture("search_page_1.json")
+    payload["data"]["searchAds"]["ads"][0]["city"]["value"]["value"] = "x"
+    ad = parse_search_response(payload).listings[0]
+    assert ad.settlement_id is None
+    assert ad.settlement == "Гратиешты"
+
+
 def test_ad_without_id_is_reported_but_has_no_unparsed_id():
     payload = load_fixture("search_page_1.json")
     del payload["data"]["searchAds"]["ads"][0]["id"]
