@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from homealize.config import PoiSettings
+from homealize.config import DEFAULT_CHAINS, PoiSettings
 from homealize.enrich.poi import PoiIndex, build_query, classify, ensure_pois, parse_elements
 from homealize.models import Poi
 from homealize.storage import poi_cache
@@ -62,6 +62,22 @@ def test_classify(tags, expected):
     assert classify(tags, CHAINS) == expected
 
 
+@pytest.mark.parametrize(
+    ("tags", "expected"),
+    [
+        ({"shop": "bakery", "name": "Local Bakery"}, None),
+        ({"shop": "convenience", "name": "Magazin Localitate"}, None),
+        ({"shop": "hairdresser", "name": "Salon Nr 10"}, None),
+        ({"shop": "convenience", "name": "Nr 10"}, None),
+        ({"shop": "convenience", "name": "Nr 1"}, "supermarket"),
+        ({"shop": "convenience", "brand": "Local Discounter"}, "supermarket"),
+        ({"shop": "convenience", "name": "LINELLA"}, "supermarket"),
+    ],
+)
+def test_classify_with_default_chains(tags, expected):
+    assert classify(tags, DEFAULT_CHAINS) == expected
+
+
 def test_parse_elements_takes_coordinates_and_skips_junk():
     pois = {poi.key: poi for poi in parse_elements(PAYLOAD, CHAINS)}
     assert set(pois) == {"node/1", "way/2", "node/3"}
@@ -116,3 +132,17 @@ def test_empty_answer_is_not_saved(db):
     pois, warning = ensure_pois(db, client, PoiSettings(chains=CHAINS), now=T0)
     assert pois == []
     assert "0 объектов" in warning
+
+
+def test_partial_overpass_answer_keeps_old_pois(db):
+    partial = {
+        "elements": [PAYLOAD["elements"][0]],
+        "remark": 'runtime error: Query timed out in "query" at line 3 after 240 seconds.',
+    }
+    client, _ = make_client([httpx.Response(200, json=PAYLOAD), httpx.Response(200, json=partial)])
+    settings = PoiSettings(chains=CHAINS)
+    ensure_pois(db, client, settings, now=T0)
+    pois, warning = ensure_pois(db, client, settings, now=T0 + timedelta(days=1), force=True)
+    assert len(pois) == 3
+    assert "POI не обновлены" in warning
+    assert poi_cache.poi_fetched_at(db) == T0

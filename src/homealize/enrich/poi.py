@@ -1,6 +1,7 @@
 """Инфраструктура из OpenStreetMap: запрос Overpass, классификация, поиск ближайших объектов."""
 
 import math
+import re
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -13,6 +14,8 @@ from homealize.storage import poi_cache
 
 SEARCH_RADIUS_M = 5000.0  # дальше ближайший объект не ищем: для оценки важно до 1,5 км
 _METERS_PER_DEGREE_LAT = 111_320.0
+# Магазины, где сеть из settings.chains считается продуктовой; остальные «шопы» с похожим названием — нет.
+GROCERY_SHOPS = frozenset({"convenience", "grocery", "general", "department_store"})
 
 
 def build_query(settings: PoiSettings) -> str:
@@ -35,7 +38,7 @@ def build_query(settings: PoiSettings) -> str:
 def classify(tags: dict[str, str], chains: list[str]) -> str | None:
     """Категория объекта для оценки или None, если он не нужен."""
     shop = tags.get("shop")
-    if shop == "supermarket" or (shop and _is_chain(tags, chains)):
+    if shop == "supermarket" or (shop in GROCERY_SHOPS and _is_chain(tags, chains)):
         return "supermarket"
     amenity = tags.get("amenity")
     if amenity in ("school", "kindergarten", "pharmacy"):
@@ -67,7 +70,11 @@ def fetch_pois(client: httpx.Client, settings: PoiSettings) -> list[Poi]:
     response = client.post(settings.overpass_url, data={"data": build_query(settings)},
                            timeout=settings.timeout_seconds)
     response.raise_for_status()
-    return parse_elements(response.json(), settings.chains)
+    payload = response.json()
+    remark = payload.get("remark") or ""
+    if "runtime error" in remark.casefold():
+        raise ValueError(f"Overpass ответил с ошибкой: {remark}")
+    return parse_elements(payload, settings.chains)
 
 
 def ensure_pois(
@@ -114,5 +121,6 @@ class PoiIndex:
 
 
 def _is_chain(tags: dict[str, str], chains: list[str]) -> bool:
+    """Название сети есть в brand или name как отдельное слово (без буквы или цифры рядом)."""
     text = f"{tags.get('brand', '')} {tags.get('name', '')}".casefold()
-    return any(chain.casefold() in text for chain in chains)
+    return any(re.search(rf"(?<![\w]){re.escape(chain.casefold())}(?![\w])", text) for chain in chains)
