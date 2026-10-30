@@ -1,7 +1,9 @@
 """Очередь уведомлений (спека §7.1, §13): сообщения ждут в notifications, пока Telegram их не примет.
 
 enqueue не делает commit. deliver фиксирует каждое сообщение сразу после отправки, чтобы сбой
-посреди отправки не повторил уже доставленное.
+посреди отправки не повторил уже доставленное. Длинное сообщение уходит частями (split_text): число
+доставленных частей хранится в payload["sent_parts"] и фиксируется после каждой, так что следующая
+попытка продолжает с первой недоставленной части.
 """
 
 import json
@@ -13,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from homealize.config import TelegramSettings
-from homealize.notify.telegram import TelegramClient, TelegramError
+from homealize.notify.telegram import TelegramClient, TelegramError, split_text
 
 log = logging.getLogger(__name__)
 
@@ -28,7 +30,7 @@ class Outgoing:
     listing_id: str | None = None
     topic: str | None = None  # вид тревоги или дата дайджеста
     preview_url: str | None = None  # фото над текстом
-    data: dict = field(default_factory=dict)  # что ещё сохранить в payload (например, топ дайджеста)
+    data: dict = field(default_factory=dict)  # что ещё сохранить в payload (например, топ дайджеста); не sent_parts
 
 
 @dataclass(frozen=True)
@@ -81,7 +83,7 @@ def deliver(
             sleep(settings.send_pause_seconds)
         payload = json.loads(row["payload"])
         try:
-            _send(notifier, payload, sleep)
+            _send(conn, notifier, row["id"], payload, sleep)
         except TelegramError as exc:
             attempts = row["attempts"] + 1
             give_up = exc.permanent or attempts >= settings.max_attempts
@@ -120,14 +122,31 @@ def last_created(conn: sqlite3.Connection, kind: str, topic: str) -> datetime | 
     return datetime.fromisoformat(value) if value else None
 
 
-def _send(notifier: Notifier, payload: dict, sleep: Callable[[float], None]) -> None:
+def _send(
+    conn: sqlite3.Connection, notifier: Notifier, notification_id: int, payload: dict, sleep: Callable[[float], None]
+) -> None:
+    """Отправляет недоставленные части сообщения; после каждой, кроме последней, запоминает прогресс."""
+    parts = split_text(payload["text"])
+    for index in range(payload.get("sent_parts", 0), len(parts)):
+        preview_url = payload.get("preview_url") if index == 0 else None  # фото — только у первой части
+        _send_part(notifier, parts[index], preview_url, sleep)
+        if index + 1 < len(parts):
+            payload["sent_parts"] = index + 1
+            conn.execute(
+                "UPDATE notifications SET payload = ? WHERE id = ?",
+                (json.dumps(payload, ensure_ascii=False), notification_id),
+            )
+            conn.commit()
+
+
+def _send_part(notifier: Notifier, text: str, preview_url: str | None, sleep: Callable[[float], None]) -> None:
     try:
-        notifier.client.send_message(notifier.chat_id, payload["text"], preview_url=payload.get("preview_url"))
+        notifier.client.send_message(notifier.chat_id, text, preview_url=preview_url)
     except TelegramError as exc:
         if exc.retry_after is None or exc.retry_after > MAX_RETRY_AFTER:
             raise
         sleep(exc.retry_after)
-        notifier.client.send_message(notifier.chat_id, payload["text"], preview_url=payload.get("preview_url"))
+        notifier.client.send_message(notifier.chat_id, text, preview_url=preview_url)
 
 
 def _set(conn: sqlite3.Connection, notification_id: int, *, status: str, attempts: int, error: str) -> None:

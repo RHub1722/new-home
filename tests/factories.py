@@ -117,8 +117,8 @@ def score_record(listing_id: str, **overrides) -> dict:
 class FakeTelegram:
     """Telegram для тестов: запоминает отправленное.
 
-    errors — исключения для первых отправок по порядку; updates — ответы get_updates по порядку
-    (список обновлений или исключение).
+    errors — исключения для первых отправок по порядку (None — эта отправка проходит); updates — ответы
+    get_updates по порядку (список обновлений или исключение).
     """
 
     def __init__(self, *, errors=(), updates=()):
@@ -129,8 +129,9 @@ class FakeTelegram:
         self.closed = False
 
     def send_message(self, chat_id, text, *, preview_url=None):
-        if self.errors:
-            raise self.errors.pop(0)
+        error = self.errors.pop(0) if self.errors else None
+        if error is not None:
+            raise error
         self.sent.append((chat_id, text, preview_url))
 
     def get_updates(self, offset, timeout):
