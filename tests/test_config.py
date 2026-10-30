@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from homealize.config import Settings, load_settings
+from homealize.config import POI_CATEGORIES, UTILITIES, Settings, load_settings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -57,3 +57,40 @@ def test_project_settings_file_is_valid():
     s = load_settings(PROJECT_ROOT / "config" / "settings.yaml")
     assert s.filters.area_sot_min == 5
     assert s.storage.db_path == Path("data/homealize.db")
+
+
+def test_stage2_defaults_match_spec():
+    s = Settings()
+    w = s.scoring.weights
+    assert (w.price, w.route, w.infrastructure, w.utilities, w.settlement) == (0.30, 0.20, 0.20, 0.20, 0.10)
+    assert s.scoring.max_price_eur == 50000
+    assert s.routing.max_route_km == 30
+    assert len(s.routing.entry_points) == 14
+    assert s.routing.city_settlement_ids == [13859]
+    assert set(s.scoring.poi_weights) == set(POI_CATEGORIES)
+    assert set(s.scoring.utility_weights) == set(UTILITIES)
+    assert s.export.dir == Path("exports")
+
+
+def test_project_settings_file_matches_defaults():
+    assert load_settings(PROJECT_ROOT / "config" / "settings.yaml") == Settings()
+
+
+def test_weights_must_sum_to_one():
+    with pytest.raises(ValidationError):
+        Settings.model_validate({"scoring": {"weights": {"price": 0.5}}})
+
+
+def test_osrm_table_size_is_limited():
+    with pytest.raises(ValidationError):
+        Settings.model_validate({"routing": {"batch_size": 90}})
+
+
+def test_chain_names_must_be_plain():
+    with pytest.raises(ValidationError):
+        Settings.model_validate({"poi": {"chains": ["Nr. 1"]}})
+
+
+def test_unknown_poi_category_is_rejected():
+    with pytest.raises(ValidationError):
+        Settings.model_validate({"scoring": {"poi_weights": {"bank": 1.0}}})

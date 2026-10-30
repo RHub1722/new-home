@@ -32,3 +32,42 @@ logging:
   path: "logs/homealize.log"
   max_bytes: 10485760
   backup_count: 5
+
+routing:
+  osrm_url: "https://router.project-osrm.org"   # публичный сервер; на VPS (этап 5) — свой контейнер
+  max_route_km: 30                              # дальше от въезда в город — участок не попадает в рейтинг
+  city_settlement_ids: [13859]                  # «Кишинёв»: участки в черте города получают 0 км
+  entry_points:                                 # где магистрали пересекают границу города (OSM, 2026-10-30)
+    - {name: "R1 Calea Trușenilor", lat: 47.05563, lon: 28.76417}
+    - {name: "R3 Șoseaua Hâncești", lat: 46.97861, lon: 28.77084}
+    - {name: "M3 Drumul Băcioiului", lat: 46.95466, lon: 28.86559}
+    - {name: "R6 Calea Orheiului", lat: 47.06586, lon: 28.85704}
+    - {name: "M1 окружная (север)", lat: 47.0747, lon: 28.81362}
+    - {name: "M1 окружная (запад)", lat: 47.04221, lon: 28.7564}
+    - {name: "R2 Șoseaua Muncești", lat: 46.92038, lon: 28.97142}
+    - {name: "ул. Тудор Владимиреску", lat: 47.02461, lon: 28.78344}
+    - {name: "ул. Буковина", lat: 47.06816, lon: 28.88644}
+    - {name: "R2 Băcioii Noi", lat: 46.95257, lon: 28.92021}
+    - {name: "бул. Дачия (юг)", lat: 46.9441, lon: 28.92314}
+    - {name: "бул. Дачия (север)", lat: 46.95883, lon: 28.89937}
+    - {name: "L450 ул. Дойна", lat: 47.07476, lon: 28.83011}
+    - {name: "L455 Chișinău – Vadul lui Vodă", lat: 47.04865, lon: 28.92514}
+
+poi:
+  radius_km: 35                  # инфраструктура скачивается в этом радиусе от центра Кишинёва
+  refresh_days: 30
+  chains: ["Linella", "Kaufland", "Fidesco", "Local", "Green Hills", "Velmart", "Nr 1"]
+
+scoring:
+  weights: {price: 0.30, route: 0.20, infrastructure: 0.20, utilities: 0.20, settlement: 0.10}
+  settlements_path: "config/settlements.yaml"
+  max_price_eur: 50000           # бюджет: дороже — не в рейтинге, но учитывается в медианах
+  suspicious_ratio: 0.25         # дешевле этой доли медианы — «подозрительно дёшево»
+  route_best_min: 5              # до въезда за столько минут или быстрее — 100 баллов
+  route_worst_min: 30            # столько минут или дольше — 0 баллов
+  poi_weights: {supermarket: 0.30, school: 0.20, kindergarten: 0.15, pharmacy: 0.15, bus_stop: 0.10, clinic: 0.10}
+  utility_weights: {electricity: 35, gas: 30, water: 25, sewerage: 10}
+
+export:
+  dir: "exports"
+  keep_days: 30                  # сколько дней хранить дневные копии Excel
