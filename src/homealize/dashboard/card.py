@@ -129,7 +129,8 @@ def set_mark(
     """Ставит (on=True) или снимает ★ / «скрыть»; «скрыть» сразу меняет места, как /hide в боте.
 
     Пишет под блокировкой прогона: пересчёт баллов посреди прогона мог бы затереть отметку.
-    True — отметка изменилась. MarkBusyError — идёт прогон или база занята.
+    True — отметка изменилась. MarkBusyError — идёт прогон или базу занял другой процесс (SQLITE_BUSY/LOCKED);
+    остальные ошибки SQLite пробрасываются как есть.
     """
     if mark not in (marks.FAV, marks.HIDDEN):
         raise ValueError(f"Неизвестная отметка: {mark}")
@@ -148,6 +149,8 @@ def set_mark(
                 raise
     except LockBusyError:
         raise MarkBusyError("идёт прогон") from None
-    except sqlite3.OperationalError as exc:  # «database is locked»: в базу пишет другой процесс
-        raise MarkBusyError(str(exc)) from None
+    except sqlite3.OperationalError as exc:
+        if (exc.sqlite_errorcode & 0xFF) not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):  # другое — не прячем
+            raise
+        raise MarkBusyError(str(exc)) from exc  # «database is locked»: в базу пишет другой процесс
     return changed

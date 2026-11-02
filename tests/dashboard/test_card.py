@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -114,3 +115,33 @@ def test_set_mark_rejects_unknown_marks(db, settings):
     seed(db, score_record("a"))
     with pytest.raises(ValueError):
         set_mark(db, settings, "a", "pinned", on=True, now=T0)
+
+
+def test_set_mark_reports_a_locked_database_as_busy(tmp_path, settings):
+    path = tmp_path / "test.db"
+    conn = connect(path)
+    migrate(conn)
+    seed(conn, score_record("a"))
+    writer = connect(path)  # другой процесс: держит запись в базу
+    try:
+        writer.execute("BEGIN IMMEDIATE")
+        conn.execute("PRAGMA busy_timeout = 0")
+        with pytest.raises(MarkBusyError) as excinfo:
+            set_mark(conn, settings, "a", marks.FAV, on=True, now=T0)
+        assert isinstance(excinfo.value.__cause__, sqlite3.OperationalError)
+        writer.rollback()
+    finally:
+        writer.close()
+    fresh = connect(path)
+    try:
+        assert marks.marked(fresh, marks.FAV) == set()
+    finally:
+        fresh.close()
+        conn.close()
+
+
+def test_set_mark_lets_other_database_errors_through(db, settings):
+    seed(db, score_record("a"))
+    db.execute("DROP TABLE user_marks")  # не блокировка: ошибка должна дойти до вызывающего как есть
+    with pytest.raises(sqlite3.OperationalError):
+        set_mark(db, settings, "a", marks.FAV, on=True, now=T0)
