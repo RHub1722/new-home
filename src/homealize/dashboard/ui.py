@@ -91,7 +91,7 @@ def _page(conn: sqlite3.Connection, settings: Settings) -> None:
         _card(conn, settings, link_id, key="link", closable=True)
     top, map_tab, market_tab = st.tabs(["Топ", "Карта", "Рынок"])
     with top:
-        _top(conn, settings, shown, filters)
+        _top(conn, settings, shown)
     with map_tab:
         _map(conn, settings, shown, filters)
     with market_tab:
@@ -118,10 +118,14 @@ def _sidebar(rows: list[ListingView]) -> Filters:
     show_hidden = bar.checkbox("Показать скрытые", key="f_hidden")
     show_suspicious = bar.checkbox("Показать подозрительно дешёвые", key="f_suspicious")
     show_over_budget = bar.checkbox("Показать дороже бюджета", key="f_over_budget")
-    limits = listings.bounds(rows)
+    limits = listings.bounds(
+        rows, show_hidden=show_hidden, show_suspicious=show_suspicious, show_over_budget=show_over_budget
+    )
     price = area = max_minutes = None
     if limits is not None:
-        price = _range_slider(bar, "Цена, €", limits.price, step=500.0, number_format="%.0f", key="f_price")
+        price = _range_slider(
+            bar, "Цена, €", limits.price, step=listings.PRICE_STEP, number_format="%.0f", key="f_price"
+        )
         area = _range_slider(bar, "Площадь, сот.", limits.area, step=0.5, number_format="%.1f", key="f_area")
         if limits.max_minutes > 0:
             max_minutes = bar.slider(
@@ -157,16 +161,19 @@ def _range_slider(bar, label: str, limits: tuple[float, float], *, step: float, 
     return bar.slider(label, low, high, (low, high), step=step, format=number_format, key=f"{key}_{low}_{high}")
 
 
-def _top(conn: sqlite3.Connection, settings: Settings, shown: list[ListingView], filters: Filters) -> None:
+def _top(conn: sqlite3.Connection, settings: Settings, shown: list[ListingView]) -> None:
     if not shown:
         st.info("Под фильтры ничего не подошло.")
         return
     rated = sum(row.rank is not None for row in shown)
     st.caption(f"Показано {len(shown)}, в рейтинге из них {rated}. Нажмите на строку — ниже откроется карточка.")
     frame = _top_frame(shown)
+    # Ключ — показанные id, а не фильтры: Streamlit хранит выбор таблицы по ключу и после смены данных (прогон,
+    # /hide в боте) оставил бы номер строки от прежней таблицы. Теперь при другом составе или порядке выбор сбрасывается.
+    shown_key = hash(tuple(row.listing_id for row in shown))
     event = st.dataframe(
         frame,
-        key=f"top_{st.session_state.get(GENERATION, 0)}_{hash(filters)}",
+        key=f"top_{st.session_state.get(GENERATION, 0)}_{shown_key}",
         on_select="rerun",
         selection_mode="single-row",
         hide_index=True,
@@ -181,8 +188,9 @@ def _top(conn: sqlite3.Connection, settings: Settings, shown: list[ListingView],
             "999.md": st.column_config.LinkColumn(display_text="открыть"),
         },
     )
-    if event.selection.rows:
-        _card(conn, settings, str(frame.iloc[event.selection.rows[0]]["id"]), key="top")
+    rows = event.selection.rows
+    if rows and rows[0] < len(frame):
+        _card(conn, settings, str(frame.iloc[rows[0]]["id"]), key="top")
 
 
 def _top_frame(rows: list[ListingView]) -> pd.DataFrame:
@@ -387,17 +395,20 @@ def _market(conn: sqlite3.Connection, settings: Settings) -> None:
         f"Село показывается, если на этой неделе в нём не меньше {d.market_min_n} объявлений."
     )
     change = f"За {d.market_compare_weeks} нед., %"
+    summary = pd.DataFrame([
+        {
+            "Село": row.place.settlement,
+            "Район": row.place.region or "",
+            "Объявлений": row.n,
+            "Медиана €/сот.": row.median,
+            change: row.change_percent,
+        }
+        for row in table
+    ])
+    # Первые недели сравнивать не с чем: столбец из одних None стал бы object, и NumberColumn вывел бы в ячейках «None».
+    summary[change] = summary[change].astype("float64")
     st.dataframe(
-        pd.DataFrame([
-            {
-                "Село": row.place.settlement,
-                "Район": row.place.region or "",
-                "Объявлений": row.n,
-                "Медиана €/сот.": row.median,
-                change: row.change_percent,
-            }
-            for row in table
-        ]),
+        summary,
         hide_index=True,
         column_config={
             "Медиана €/сот.": st.column_config.NumberColumn(format="%.0f"),

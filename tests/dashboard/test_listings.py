@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 from homealize.dashboard.listings import (
+    PRICE_STEP,
     Filters,
     apply_filters,
     bounds,
@@ -117,23 +118,69 @@ def test_numeric_and_set_filters(db):
     assert ids(apply_filters(rows, Filters(only_favs=True))) == ["b"]
 
 
-def test_bounds_and_settlement_options_cover_every_showable_row(db):
+def seed_for_bounds(db):
     seed(
         db,
         ({"id": "a", "area_sot": 5.3, "settlement": "Сынжера"}, {"rank": 1, "price_eur": 28100.0, "route_min": 9.2}),
+        ({"id": "b", "area_sot": 9.6, "settlement": "Ватра"}, {"rank": 2, "price_eur": 40200.0, "route_min": 12.0}),
         (
-            {"id": "b", "area_sot": 9.6, "settlement": "Бачой"},
+            {"id": "c", "area_sot": 20.0, "settlement": "Бачой"},
             {"rank": None, "excluded_reason": "over_budget", "price_eur": 61900.0, "route_min": 21.5},
         ),
-        ({"id": "c", "settlement": "Ватра"}, {"rank": None, "excluded_reason": "too_far", "price_eur": 1000.0}),
+        (
+            {"id": "d", "area_sot": 5.0, "settlement": "Ватра"},
+            {"rank": None, "excluded_reason": "suspicious_price", "price_eur": 0.1, "route_min": 3.0},
+        ),
+        (
+            {"id": "e", "area_sot": 6.0, "settlement": "Ватра"},
+            {"rank": None, "excluded_reason": "hidden", "price_eur": 33000.0, "route_min": 40.0},
+        ),
+        (
+            {"id": "f", "area_sot": 7.0, "settlement": "Ватра"},
+            {"rank": None, "excluded_reason": "over_budget", "price_eur": 99000.0, "route_min": 10.0},
+        ),
+        ({"id": "g", "settlement": "Ятрань"}, {"rank": None, "excluded_reason": "too_far", "price_eur": 1000.0}),
+        hidden=["e", "f"],
     )
-    rows = load_listings(db)
-    limits = bounds(rows)
-    assert limits.price == (28100, 61900)
-    assert limits.area == (5.0, 10.0)
-    assert limits.max_minutes == 22.0
-    assert settlement_options(rows) == ["Бачой", "Сынжера"]
+    return load_listings(db)
+
+
+def test_bounds_follow_the_rows_the_switches_can_show(db):
+    rows = seed_for_bounds(db)
+    default = bounds(rows)  # только рейтинг: ни 0,1 €, ни 99 000 € ползунок не растягивают
+    assert default.price == (28000.0, 40500.0)
+    assert default.area == (5.0, 10.0)
+    assert default.max_minutes == 12.0
+    assert bounds(rows, show_over_budget=True).price == (28000.0, 62000.0)  # скрытое «дороже бюджета» (f) не в счёт
+    assert bounds(rows, show_suspicious=True).price == (0.0, 40500.0)
+    assert bounds(rows, show_hidden=True).max_minutes == 40.0
+    assert bounds(rows, show_hidden=True).price == (28000.0, 40500.0)
+    assert bounds(rows, show_hidden=True, show_over_budget=True).price == (28000.0, 99000.0)  # теперь и f
+    assert bounds(rows, show_over_budget=True).area == (5.0, 20.0)
+    assert bounds(rows, show_over_budget=True).max_minutes == 22.0
+
+
+def test_bounds_price_is_snapped_to_the_slider_step(db):
+    rows = seed_for_bounds(db)
+    assert PRICE_STEP == 500.0
+    for limits in (bounds(rows), bounds(rows, show_over_budget=True), bounds(rows, show_suspicious=True)):
+        assert all(value % PRICE_STEP == 0 for value in limits.price)
+    assert bounds(rows, show_over_budget=True).price == (28000.0, 62000.0)  # 28 100 вниз, 61 900 вверх
+
+
+def test_bounds_is_none_when_nothing_can_be_shown(db):
     assert bounds([]) is None
+    seed(db, ({"id": "a"}, {"rank": None, "excluded_reason": "over_budget"}))
+    rows = load_listings(db)
+    assert bounds(rows) is None  # в рейтинге пусто, а «дороже бюджета» выключено
+    assert bounds(rows, show_over_budget=True) is not None
+
+
+def test_settlement_options_cover_every_candidate(db):
+    rows = seed_for_bounds(db)
+    # переключатели ни при чём: село можно выбрать, даже если его строки сейчас скрыты; «слишком далеко» не в счёт
+    assert settlement_options(rows) == ["Бачой", "Ватра", "Сынжера"]
+    assert settlement_options([]) == []
 
 
 def test_score_color_runs_red_yellow_green():

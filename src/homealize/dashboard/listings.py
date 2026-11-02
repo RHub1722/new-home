@@ -20,6 +20,7 @@ from homealize.storage.scores import load_scored
 # дубликат, цена не в евро) дашборд не показывает: они есть в Excel на листе «Все активные».
 OPTIONAL_REASONS = frozenset({"hidden", "suspicious_price", "over_budget"})
 LISTINGS_LAYER = "listings"  # id слоя участков на карте: по нему находится выбранная точка
+PRICE_STEP = 500.0  # шаг ползунка цены, €: границы диапазона кратны ему, иначе крайнее значение недостижимо
 # Цвет балла как в Excel: 0 — красный, 50 — жёлтый, 100 — зелёный.
 _SCALE = ((0.0, (0xF8, 0x69, 0x6B)), (50.0, (0xFF, 0xEB, 0x84)), (100.0, (0x63, 0xBE, 0x7B)))
 
@@ -64,7 +65,7 @@ class Filters:
 
 @dataclass(frozen=True)
 class Bounds:
-    """Границы ползунков: по всем строкам, которые можно показать хоть каким-то переключателем."""
+    """Границы ползунков: по строкам, которые показывают выбранные переключатели (см. bounds)."""
 
     price: tuple[float, float]
     area: tuple[float, float]
@@ -97,16 +98,28 @@ def apply_filters(rows: Iterable[ListingView], filters: Filters) -> list[Listing
     return [row for row in rows if row.excluded_reason in allowed and _passes(row, filters)]
 
 
-def bounds(rows: Iterable[ListingView]) -> Bounds | None:
-    """Границы ползунков по candidates(rows); None — показывать нечего."""
-    shown = candidates(rows)
+def bounds(
+    rows: Iterable[ListingView],
+    *,
+    show_hidden: bool = False,
+    show_suspicious: bool = False,
+    show_over_budget: bool = False,
+) -> Bounds | None:
+    """Границы ползунков по строкам, которые покажут эти переключатели; None — показывать нечего.
+
+    Строки, чей переключатель выключен, диапазон не растягивают: одна цена 0,1 € или 730 000 € иначе занимает
+    почти весь ползунок. Цена округляется наружу до PRICE_STEP, чтобы крайние значения были достижимы шагом.
+    """
+    switches = Filters(show_hidden=show_hidden, show_suspicious=show_suspicious, show_over_budget=show_over_budget)
+    shown = apply_filters(rows, switches)
     prices = [row.price_eur for row in shown if row.price_eur is not None]
     areas = [row.area_sot for row in shown if row.area_sot is not None]
     minutes = [row.route_min for row in shown if row.route_min is not None]
+    # Строки без цены, площади или маршрута показать нельзя (их причины не в OPTIONAL_REASONS): None — только когда пусто.
     if not prices or not areas or not minutes:
         return None
     return Bounds(
-        price=(math.floor(min(prices)), math.ceil(max(prices))),
+        price=(math.floor(min(prices) / PRICE_STEP) * PRICE_STEP, math.ceil(max(prices) / PRICE_STEP) * PRICE_STEP),
         area=(math.floor(min(areas) * 2) / 2, math.ceil(max(areas) * 2) / 2),  # с шагом 0,5 сотки
         max_minutes=float(math.ceil(max(minutes))),
     )
