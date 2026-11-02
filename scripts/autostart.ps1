@@ -1,6 +1,7 @@
 ﻿<#
 .SYNOPSIS
-  Автозапуск Homealize при входе в Windows: задача Планировщика «Homealize» запускает `homealize serve` без окна.
+  Автозапуск Homealize при входе в Windows, без окон. Задача «Homealize» запускает `homealize serve`
+  (прогоны и Telegram-бот), задача «Homealize Dashboard» — `homealize dashboard` (веб-дашборд).
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\autostart.ps1 -Install
 .EXAMPLE
@@ -12,7 +13,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$TaskName = "Homealize"
+$Tasks = [ordered]@{
+    "Homealize"           = @{ Command = "serve"; Description = "Homealize: прогоны 999.md по расписанию и Telegram-бот" }
+    "Homealize Dashboard" = @{ Command = "dashboard"; Description = "Homealize: веб-дашборд (http://localhost:8501)" }
+}
 $Root = Split-Path -Parent $PSScriptRoot
 $Pythonw = Join-Path $Root ".venv\Scripts\pythonw.exe"
 $User = "$env:USERDOMAIN\$env:USERNAME"
@@ -23,12 +27,14 @@ if ($Install -eq $Remove) {
 }
 
 if ($Remove) {
-    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-        Write-Host "Задача «$TaskName» удалена, serve остановлен."
-    } else {
-        Write-Host "Задачи «$TaskName» нет — удалять нечего."
+    foreach ($name in $Tasks.Keys) {
+        if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
+            Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+            Unregister-ScheduledTask -TaskName $name -Confirm:$false
+            Write-Host "Задача «$name» остановлена и удалена."
+        } else {
+            Write-Host "Задачи «$name» нет — удалять нечего."
+        }
     }
     exit 0
 }
@@ -42,14 +48,25 @@ if (-not (Test-Path (Join-Path $Root ".env"))) {
     exit 1
 }
 
-$action = New-ScheduledTaskAction -Execute $Pythonw -Argument "-m homealize.cli serve" -WorkingDirectory $Root
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $User
 $options = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew `
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
     -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5)
 $principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel Limited
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $options `
-    -Principal $principal -Description "Homealize: прогоны 999.md по расписанию и Telegram-бот" -Force | Out-Null
-Start-ScheduledTask -TaskName $TaskName
-Write-Host "Готово: serve запущен и будет стартовать при каждом входе в Windows."
-Write-Host "Бот пришлёт «Homealize запущен». Логи: $Root\logs\homealize.log"
+foreach ($name in $Tasks.Keys) {
+    $task = $Tasks[$name]
+    $action = New-ScheduledTaskAction -Execute $Pythonw -Argument "-m homealize.cli $($task.Command)" `
+        -WorkingDirectory $Root
+    Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Settings $options `
+        -Principal $principal -Description $task.Description -Force | Out-Null
+    Start-ScheduledTask -TaskName $name
+}
+Write-Host "Готово: serve и дашборд запущены и будут стартовать при каждом входе в Windows."
+Write-Host "Бот пришлёт «Homealize запущен». Дашборд на этом компьютере: http://localhost:8501"
+$addresses = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } |
+    Select-Object -ExpandProperty IPAddress
+foreach ($address in $addresses) {
+    Write-Host "С телефона в той же Wi-Fi: http://${address}:8501"
+}
+Write-Host "Логи: $Root\logs\homealize.log (serve) и $Root\logs\dashboard.log (дашборд)"

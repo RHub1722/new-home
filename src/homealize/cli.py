@@ -1,9 +1,11 @@
-"""Командная строка: homealize init-db | run | rescore | export | refresh-poi | serve | digest | telegram-test."""
+"""Командная строка: homealize init-db | run | rescore | export | refresh-poi | serve | digest | telegram-test | dashboard."""
 
 import argparse
 import html
 import logging
+import os
 import re
+import socket
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -12,6 +14,7 @@ from pathlib import Path
 import yaml
 
 from homealize.config import Settings, load_settings, load_telegram_secrets
+from homealize.dashboard import APP_PATH, CONFIG_ENV
 from homealize.enrich.poi import ensure_pois
 from homealize.evaluate import build_http_client
 from homealize.export.excel import ExportError, export_workbook
@@ -60,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     digest = commands.add_parser("digest", help="отправить дайджест дня сейчас")
     digest.add_argument("--dry-run", action="store_true", help="не отправлять, а показать")
     commands.add_parser("telegram-test", help="проверить бота и узнать chat id")
+    commands.add_parser("dashboard", help="веб-дашборд: топ, карта, карточки, рынок (работает, пока не остановят)")
     args = parser.parse_args(argv)
 
     try:
@@ -82,6 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         "serve": lambda: _serve(settings),
         "digest": lambda: _digest(settings, dry_run=args.dry_run),
         "telegram-test": lambda: _telegram_test(settings),
+        "dashboard": lambda: _dashboard(settings, args.config),
     }
     return handlers[args.command]()
 
@@ -329,6 +334,66 @@ def _notifier(settings: Settings) -> Notifier | None:
 
 def _telegram_client(settings: Settings, token: str) -> TelegramClient:
     return TelegramClient(token, api_url=settings.telegram.api_url, timeout_seconds=settings.telegram.timeout_seconds)
+
+
+def _dashboard(settings: Settings, config_path: Path) -> int:
+    d = settings.dashboard
+    _redirect_missing_output(d.log_path)
+    if not _port_free(d.host, d.port):
+        print(
+            f"Порт {d.port} занят: дашборд уже запущен (например, автозапуском) — откройте http://localhost:{d.port}",
+            file=sys.stderr,
+        )
+        return BUSY
+    os.environ[CONFIG_ENV] = str(config_path.resolve())
+    others = " и с других устройств в этой сети по IP-адресу компьютера" if d.host == "0.0.0.0" else ""
+    print(f"Дашборд: http://localhost:{d.port}{others}. Остановить: Ctrl+C.", flush=True)
+    return _run_streamlit([
+        "streamlit", "run", str(APP_PATH),
+        "--server.address", d.host,
+        "--server.port", str(d.port),
+        "--server.headless", "true",
+        "--server.fileWatcherType", "none",
+        "--server.runOnSave", "false",
+        "--browser.gatherUsageStats", "false",
+        "--client.toolbarMode", "viewer",
+    ])
+
+
+def _run_streamlit(argv: list[str]) -> int:
+    """Запускает Streamlit в этом процессе; возвращает код выхода, когда сервер остановят."""
+    from streamlit.web import cli as streamlit_cli  # тяжёлый импорт — только для команды dashboard
+
+    sys.argv = argv
+    try:
+        streamlit_cli.main()
+    except SystemExit as exc:
+        if exc.code is None:
+            return 0
+        return exc.code if isinstance(exc.code, int) else 1
+    return 0
+
+
+def _port_free(host: str, port: int) -> bool:
+    """Свободен ли порт: второй дашборд на том же порту не запустится."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
+def _redirect_missing_output(path: Path) -> None:
+    """Под pythonw (автозапуск) sys.stdout и sys.stderr — None: вывод Streamlit и ошибки пишутся в файл."""
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stream = open(path, "a", encoding="utf-8", buffering=1)  # открыт до конца процесса
+    if sys.stdout is None:
+        sys.stdout = stream
+    if sys.stderr is None:
+        sys.stderr = stream
 
 
 def _print_cycle(result: CycleResult, *, telegram: bool, dry_run: bool) -> None:

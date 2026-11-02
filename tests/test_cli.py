@@ -1,5 +1,7 @@
 import json
 import logging
+import os
+import socket
 import sqlite3
 import sys
 from pathlib import Path
@@ -8,6 +10,7 @@ import pytest
 
 from homealize import cli, jobs
 from homealize.config import LoggingSettings, Settings
+from homealize.dashboard import APP_PATH, CONFIG_ENV
 from homealize.export.excel import ExportError
 from homealize.logging_setup import configure_logging, reset_logging
 from homealize.models import Poi
@@ -601,3 +604,77 @@ def test_logging_without_a_console(tmp_path, monkeypatch):
     assert not any(type(handler) is logging.StreamHandler for handler in logging.getLogger().handlers)
     reset_logging()
     assert "без консоли" in (tmp_path / "x.log").read_text(encoding="utf-8")
+
+
+def dashboard_config(tmp_path: Path, **dashboard) -> Path:
+    cfg = write_config(tmp_path)
+    lines = "".join(f"  {name}: '{value}'\n" for name, value in dashboard.items())
+    cfg.write_text(cfg.read_text(encoding="utf-8") + f"dashboard:\n{lines}", encoding="utf-8")
+    return cfg
+
+
+@pytest.fixture
+def streamlit_calls(monkeypatch):
+    """Настоящий Streamlit не запускается: запоминаем, с какими аргументами его вызвали бы."""
+    calls = []
+    monkeypatch.setattr(cli, "_run_streamlit", lambda argv: calls.append(list(argv)) or 0)
+    monkeypatch.setenv(CONFIG_ENV, "заглушка")  # после теста переменная вернётся к прежнему значению
+    return calls
+
+
+def free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def test_dashboard_starts_streamlit_with_the_settings(tmp_path, capsys, streamlit_calls):
+    port = free_port()
+    cfg = dashboard_config(tmp_path, host="127.0.0.1", port=port)
+    assert cli.main(["--config", str(cfg), "dashboard"]) == 0
+    (argv,) = streamlit_calls
+    assert argv[:3] == ["streamlit", "run", str(APP_PATH)]
+    options = dict(zip(argv[3::2], argv[4::2]))
+    assert options == {
+        "--server.address": "127.0.0.1",
+        "--server.port": str(port),
+        "--server.headless": "true",
+        "--server.fileWatcherType": "none",
+        "--server.runOnSave": "false",
+        "--browser.gatherUsageStats": "false",
+        "--client.toolbarMode": "viewer",
+    }
+    assert os.environ[CONFIG_ENV] == str(cfg.resolve())
+    out = capsys.readouterr().out
+    assert f"http://localhost:{port}" in out
+    assert "других устройств" not in out
+
+
+def test_dashboard_on_all_interfaces_mentions_other_devices(tmp_path, capsys, monkeypatch, streamlit_calls):
+    monkeypatch.setattr(cli, "_port_free", lambda host, port: True)
+    cfg = dashboard_config(tmp_path, host="0.0.0.0", port=free_port())
+    assert cli.main(["--config", str(cfg), "dashboard"]) == 0
+    assert "других устройств" in capsys.readouterr().out
+
+
+def test_dashboard_refuses_a_busy_port(tmp_path, capsys, streamlit_calls):
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        cfg = dashboard_config(tmp_path, host="127.0.0.1", port=busy.getsockname()[1])
+        assert cli.main(["--config", str(cfg), "dashboard"]) == 4
+    assert streamlit_calls == []
+    assert "уже запущен" in capsys.readouterr().err
+
+
+def test_dashboard_writes_output_to_a_file_under_pythonw(tmp_path, monkeypatch, streamlit_calls):
+    log_path = tmp_path / "logs" / "dashboard.log"
+    cfg = dashboard_config(tmp_path, host="127.0.0.1", port=free_port(), log_path=log_path.as_posix())
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    assert cli.main(["--config", str(cfg), "dashboard"]) == 0
+    stream = sys.stdout
+    stream.flush()
+    assert sys.stderr is stream
+    assert "http://localhost" in log_path.read_text(encoding="utf-8")
+    stream.close()
