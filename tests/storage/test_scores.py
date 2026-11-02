@@ -53,3 +53,12 @@ def test_get_scored_joins_listing_fields(db):
     assert "aaa111.jpg" in row["images"]
     assert get_scored(db, "missing") is None
     assert "images" in load_scored(db)[0].keys()
+
+
+def test_scored_rows_carry_utilities_and_description(db):
+    seed(db, score_record("a"))
+    row = get_scored(db, "a")
+    assert (row["has_electricity"], row["has_gas"], row["has_water"], row["has_sewerage"]) == (1, 1, 1, 0)
+    assert row["description"] == "Ровный участок."
+    assert row["site_updated_at"].startswith("2026-10-28")
+    assert "settlement_id" in row.keys()

@@ -81,7 +81,9 @@ def test_stage2_defaults_match_spec():
 
 
 def test_project_settings_file_matches_defaults():
-    assert load_settings(PROJECT_ROOT / "config" / "settings.yaml") == Settings()
+    # Единственное отличие от умолчаний — выбор пользователя: дашборд открывается с телефона в той же сети.
+    expected = Settings.model_validate({"dashboard": {"host": "0.0.0.0"}})
+    assert load_settings(PROJECT_ROOT / "config" / "settings.yaml") == expected
 
 
 def test_weights_must_sum_to_one():
@@ -212,3 +214,14 @@ def test_bad_env_line_is_an_error_without_its_value(tmp_path):
     with pytest.raises(ValueError, match="строка 1") as caught:
         load_telegram_secrets(env, environ={})
     assert "secret" not in str(caught.value)
+
+
+def test_stage4_defaults_match_spec():
+    d = Settings().dashboard
+    assert (d.host, d.port, d.log_path) == ("127.0.0.1", 8501, Path("logs/dashboard.log"))
+    assert (d.photos, d.market_min_n, d.market_weeks, d.market_compare_weeks) == (6, 3, 12, 4)
+
+
+def test_dashboard_port_must_be_unprivileged():
+    with pytest.raises(ValidationError):
+        Settings.model_validate({"dashboard": {"port": 80}})

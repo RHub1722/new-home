@@ -27,8 +27,9 @@ SCORE_COLUMNS = (
     "rank",
 )
 _SCORED = (
-    "SELECT s.*, l.title, l.url, l.region, l.settlement, l.zone, l.area_sot, l.price_original, l.currency, "
-    "l.author_type, l.first_seen_at, l.images "
+    "SELECT s.*, l.title, l.url, l.region, l.settlement, l.settlement_id, l.zone, l.area_sot, l.price_original, "
+    "l.currency, l.author_type, l.first_seen_at, l.site_updated_at, l.images, l.description, "
+    "l.has_electricity, l.has_gas, l.has_water, l.has_sewerage "
     "FROM scores s JOIN listings l ON l.id = s.listing_id"
 )
 

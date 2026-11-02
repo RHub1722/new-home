@@ -290,6 +290,16 @@ class TelegramSettings(_Section):
         return self
 
 
+class DashboardSettings(_Section):
+    host: str = Field("127.0.0.1", min_length=1)  # 0.0.0.0 — открыть и с других устройств в этой сети
+    port: int = Field(8501, ge=1024, le=65535)
+    log_path: Path = Path("logs/dashboard.log")  # вывод дашборда под pythonw (автозапуск)
+    photos: int = Field(6, ge=0, le=20)  # сколько фото показывать в карточке
+    market_min_n: int = Field(3, ge=1)  # медиана села на вкладке «Рынок» — если объявлений не меньше
+    market_weeks: int = Field(12, ge=1, le=104)  # сколько недель на графике рынка
+    market_compare_weeks: int = Field(4, ge=1)  # изменение медианы за столько недель
+
+
 class Settings(_Section):
     source: SourceSettings = Field(default_factory=SourceSettings)
     filters: FilterSettings = Field(default_factory=FilterSettings)
@@ -303,6 +313,7 @@ class Settings(_Section):
     export: ExportSettings = Field(default_factory=ExportSettings)
     schedule: ScheduleSettings = Field(default_factory=ScheduleSettings)
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
+    dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
 
 
 def load_settings(path: Path) -> Settings:
